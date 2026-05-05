@@ -280,7 +280,18 @@ class OrchestratorAgent(BaseAgent):
         if hint:
             print(f"   Next: {hint}")
         print(f"{'='*60}\n")
+    
+    # provide a short focused worked example
+    def _inject_micro_example(self, concept: str):
+        from agents.tutor import TutorAgent
 
+        tutor = TutorAgent(self.state)
+
+        tutor.run(
+            system="Provide a short, focused worked example to clarify this concept.",
+            user_message=f"Concept: {concept}. Give one clear worked example."
+        )
+    # ====================================================
     # ── Main entry point ──────────────────────────────────────────────────────
 
     async def run_session(self, student_id: str, is_new: bool = False) -> None:
