@@ -95,6 +95,32 @@ class AdaptationEngine(BaseAgent):
                 required=["action", "reason"],
             ),
         ]
+    # ===== GAP ANALYSIS METHOD =====
+    def run_gap_analysis(self):
+        if self.state.evaluation_cycle_count % 3 != 0:
+            return None
+
+        # Use last 3 evaluations
+        if not hasattr(self.state, "evaluation_history"):
+            return None
+
+        recent = self.state.evaluation_history[-3:]
+
+        weak = [
+            r.concept for r in recent
+            if r.mastery_score < 0.5
+        ]
+
+        if len(weak) < 2:
+            return None
+
+        result = self.run(
+            system="Identify the most likely missing prerequisite concept.",
+            user_message=f"Weak concepts: {weak}. Domain: {self.state.domain}",
+        )
+
+        return result.get("missing_concept")
+    # ==================================
 
     # ── Tool executor ─────────────────────────────────────────────────────────
 
