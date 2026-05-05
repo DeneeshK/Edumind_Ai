@@ -142,18 +142,26 @@ class OrchestratorAgent(BaseAgent):
         ):
             module = curriculum.modules[curriculum.current_index]
             print(f"\n{'─'*60}")
-            print(f"📖 Module {curriculum.current_index + 1}/{len(curriculum.modules)}: {module.title}")
+            print(f" Module {curriculum.current_index + 1}/{len(curriculum.modules)}: {module.title}")
             print(f"{'─'*60}")
 
             # ── Teach ─────────────────────────────────────────────────────────
             tutor = TutorAgent(self.state)
             lesson_result = tutor.teach()
 
+            # ===== DOUBT COUNT TRIGGER  =====
+            doubt_count = self.state.get_doubt_count(module.concept)
+
+            if doubt_count >= 2:
+                print(f"\n💡 You asked {doubt_count} doubts on '{module.concept}'. Injecting micro-example...\n")
+                self._inject_micro_example(module.concept)
+            # =========================================
+
             # Update style depth score after teach (will be scored post-eval)
             style_used = lesson_result.get("style_used", "formal")
 
             # ── Get confidence ────────────────────────────────────────────────
-            print(f"\n📊 How confident are you in '{module.concept}'? (1-5): ", end="")
+            print(f"\n How confident are you in '{module.concept}'? (1-5): ", end="")
             try:
                 confidence = int(input().strip())
                 confidence = max(1, min(5, confidence))
