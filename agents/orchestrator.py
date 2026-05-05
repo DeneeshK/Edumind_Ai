@@ -179,6 +179,13 @@ class OrchestratorAgent(BaseAgent):
             engine = AdaptationEngine(self.state)
             decision = engine.decide(report)
 
+            # ===== GAP ANALYSIS TRIGGER =====
+            missing = AdaptationEngine.run_gap_analysis()
+
+            if missing:
+                print(f"\n🔍 Gap detected: {missing}\n")
+            # =================================
+
             print(f"\n⚙️  Decision: {decision.action} — {decision.reason}")
 
             if decision.action == "MOVE_FORWARD" or decision.action == "MOVE_FORWARD_WITH_FLAG":
