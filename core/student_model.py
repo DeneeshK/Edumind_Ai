@@ -247,6 +247,23 @@ class StudentState(BaseModel):
                 goal=row["goal"],
                 pace=row["pace"],
             )
+            # ===== METACOGNITION LOAD =====
+            import json
+
+            try:
+                meta_row = await conn.fetchrow(
+                    "SELECT profile_json FROM metacognition WHERE student_id=$1",
+                    student_id
+                )
+
+                if meta_row and meta_row["profile_json"]:
+                    meta_data = json.loads(meta_row["profile_json"])
+                    state.metacognition = MetacognitionProfile(**meta_data)
+
+            except Exception as e:
+                print(f"[WARN] Failed to load metacognition: {e}")
+                state.metacognition = MetacognitionProfile()
+            # =============================================
 
             # Concept mastery
             mastery_rows = await conn.fetch(
