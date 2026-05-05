@@ -368,6 +368,13 @@ class StudentState(BaseModel):
                     """,
                     self.curriculum.current_index, self.student_id,
                 )
+        # ===== METACOGNITION SAVE  =====
+        if "metacognition" in self._dirty:
+            await save_metacognition(
+                self.student_id,
+                self.metacognition.model_dump()
+            )
+        # ==============================================
 
         self.clear_dirty()
 
