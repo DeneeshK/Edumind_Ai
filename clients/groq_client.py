@@ -178,14 +178,36 @@ def tool_call_loop(
                 args_str = tool_call.function.arguments
                 logger.info("LLM called tool: {} args: {}", name, args_str[:120])
 
+                # Sanitize args_str — fix Python literals and malformed JSON
+                import re as _re
+                args_str = _re.sub(r'\bFalse\b', 'false', args_str)
+                args_str = _re.sub(r'\bTrue\b', 'true', args_str)
+                args_str = _re.sub(r'\bNone\b', 'null', args_str)
+                # Fix malformed tool calls like ask_question[]{...} -> {...}
+                args_str = _re.sub(r'^\[.*?\]', '', args_str.strip())
+                if not args_str.startswith('{'):
+                    args_str = '{}'  
+
                 # Check for terminal tool BEFORE executing
                 if name == terminal_tool_name:
                     try:
                         terminal_result = json.loads(args_str)
                     except json.JSONDecodeError:
                         terminal_result = {"raw": args_str}
+                    # Strip to only the fields defined in the terminal tool schema
+                    terminal_tool_schema = next(
+                        (t for t in tools if t["function"]["name"] == name), None
+                    )
+                    if terminal_tool_schema:
+                        allowed = set(
+                            terminal_tool_schema["function"]["parameters"]
+                            .get("properties", {}).keys()
+                        )
+                        terminal_result = {
+                            k: v for k, v in terminal_result.items()
+                            if k in allowed
+                        }
                     logger.info("Terminal tool '{}' called — exiting loop.", name)
-                    # Append a tool result so conversation stays valid
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
