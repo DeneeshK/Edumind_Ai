@@ -108,7 +108,7 @@ def tool_call_loop(
     context: str = "",
     terminal_tool_name: str = "",
     model: str | None = None,
-    tool_executor: Callable[[str, str], Any] | None = None,
+    tool_executor: Callable[[str, dict], Any] | None = None,
 ) -> dict:
     """
     The main agentic loop. Python orchestrates, LLM decides.
@@ -125,7 +125,7 @@ def tool_call_loop(
         context:            extra context appended to user_message
         terminal_tool_name: when LLM calls this tool, loop exits
         model:              override model (defaults to reasoning_model)
-        tool_executor:      fn(tool_name, args_json_str) -> result_str
+        tool_executor:      fn(tool_name, args_dict) -> result_str
                             if None, tools are recorded but not executed
     """
     client = get_client()
@@ -178,23 +178,38 @@ def tool_call_loop(
                 args_str = tool_call.function.arguments
                 logger.info("LLM called tool: {} args: {}", name, args_str[:120])
 
-                # Sanitize args_str — fix Python literals and malformed JSON
-                import re as _re
-                args_str = _re.sub(r'\bFalse\b', 'false', args_str)
-                args_str = _re.sub(r'\bTrue\b', 'true', args_str)
-                args_str = _re.sub(r'\bNone\b', 'null', args_str)
-                # Fix malformed tool calls like ask_question[]{...} -> {...}
-                args_str = _re.sub(r'^\[.*?\]', '', args_str.strip())
-                if not args_str.startswith('{'):
-                    args_str = '{}'  
+                # Parse args_str to dict — with safe fallback for malformed JSON.
+                # Strategy: fix known Python-literal issues first (True/False/None),
+                # then parse. Never use regex to strip structure — that corrupts valid args.
+                args_dict: dict = {}
+                try:
+                    import re as _re
+                    cleaned = _re.sub(r'\bTrue\b', 'true', args_str)
+                    cleaned = _re.sub(r'\bFalse\b', 'false', cleaned)
+                    cleaned = _re.sub(r'\bNone\b', 'null', cleaned)
+                    # If the model wrapped the JSON in an outer array, unwrap it
+                    cleaned = cleaned.strip()
+                    if cleaned.startswith('[') and cleaned.endswith(']'):
+                        inner = cleaned[1:-1].strip()
+                        if inner.startswith('{'):
+                            cleaned = inner
+                    args_dict = json.loads(cleaned)
+                    if not isinstance(args_dict, dict):
+                        logger.warning(
+                            "Tool '{}' args parsed to non-dict ({}), using {{}}",
+                            name, type(args_dict).__name__
+                        )
+                        args_dict = {}
+                except json.JSONDecodeError as je:
+                    logger.warning(
+                        "Tool '{}' args JSON parse failed: {} — raw: {}",
+                        name, je, args_str[:120]
+                    )
+                    args_dict = {}
 
                 # Check for terminal tool BEFORE executing
                 if name == terminal_tool_name:
-                    try:
-                        terminal_result = json.loads(args_str)
-                    except json.JSONDecodeError:
-                        terminal_result = {"raw": args_str}
-                    # Strip to only the fields defined in the terminal tool schema
+                    # Strip to only fields defined in the terminal tool schema
                     terminal_tool_schema = next(
                         (t for t in tools if t["function"]["name"] == name), None
                     )
@@ -203,10 +218,9 @@ def tool_call_loop(
                             terminal_tool_schema["function"]["parameters"]
                             .get("properties", {}).keys()
                         )
-                        terminal_result = {
-                            k: v for k, v in terminal_result.items()
-                            if k in allowed
-                        }
+                        terminal_result = {k: v for k, v in args_dict.items() if k in allowed}
+                    else:
+                        terminal_result = args_dict
                     logger.info("Terminal tool '{}' called — exiting loop.", name)
                     messages.append({
                         "role": "tool",
@@ -215,10 +229,10 @@ def tool_call_loop(
                     })
                     return terminal_result
 
-                # Execute non-terminal tool
+                # Execute non-terminal tool — pass parsed dict, not raw string
                 if tool_executor:
                     try:
-                        result = tool_executor(name, args_str)
+                        result = tool_executor(name, args_dict)
                         result_str = str(result)
                     except Exception as e:
                         result_str = f"ERROR: {e}"
