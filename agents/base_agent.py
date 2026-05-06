@@ -32,6 +32,17 @@ class BaseAgent:
     TOOLS: list[dict] = []
     TERMINAL_TOOL: str = ""
 
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Enforce that every concrete subclass declares a non-empty TERMINAL_TOOL.
+        Catches the mistake at class-definition time, not at runtime inside a loop."""
+        super().__init_subclass__(**kwargs)
+        # Skip the check for abstract intermediate classes that don't set NAME
+        if cls.NAME != "base_agent" and not cls.TERMINAL_TOOL:
+            raise TypeError(
+                f"{cls.__name__} must define a non-empty TERMINAL_TOOL class attribute. "
+                f"Without it, tool_call_loop() will never exit."
+            )
+
     def __init__(self, state: StudentState):
         self.state = state
 
