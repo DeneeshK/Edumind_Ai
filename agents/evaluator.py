@@ -228,6 +228,9 @@ RECOMMENDED ACTION GUIDE:
         self.state.update_mastery(concept, correctness, depth)
         self.state.metacognition.update_calibration(calibration_delta)
         self.state.evaluation_cycle_count += 1
+        # Append to in-memory history so AdaptationEngine.run_gap_analysis() can
+        # read it without a DB round-trip during the same session.
+        self.state.evaluation_history.append(report)
 
         # ── Write to DB immediately (mid-session) ─────────────────────────────
         await write_evaluation({
