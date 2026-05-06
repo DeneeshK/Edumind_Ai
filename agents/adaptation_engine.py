@@ -95,32 +95,94 @@ class AdaptationEngine(BaseAgent):
                 required=["action", "reason"],
             ),
         ]
-    # ===== GAP ANALYSIS METHOD =====
-    def run_gap_analysis(self):
+    # ── Gap Analysis ──────────────────────────────────────────────────────────
+
+    def run_gap_analysis(self) -> str | None:
+        """
+        Every 3 evaluation cycles, analyse the session's evaluation history
+        for a pattern of weakness indicating a missing prerequisite.
+
+        This is a genuine agentic call: the LLM receives the full eval history
+        and uses the check_prerequisites tool before deciding whether a gap
+        exists and what concept is missing.
+
+        Returns:
+            The missing concept name if a gap is found, else None.
+        """
+        # Only run every 3 completed evaluations
+        if self.state.evaluation_cycle_count == 0:
+            return None
         if self.state.evaluation_cycle_count % 3 != 0:
             return None
 
-        # Use last 3 evaluations
-        if not hasattr(self.state, "evaluation_history"):
+        # Need at least 3 evaluation records in memory this session
+        history = self.state.evaluation_history
+        if len(history) < 3:
             return None
 
-        recent = self.state.evaluation_history[-3:]
+        recent = history[-3:]
+        weak = [r for r in recent if r.mastery_score < 0.5]
 
-        weak = [
-            r.concept for r in recent
-            if r.mastery_score < 0.5
-        ]
-
+        # Only act if at least 2 of the last 3 evaluations show weakness
         if len(weak) < 2:
             return None
 
-        result = self.run(
-            system="Identify the most likely missing prerequisite concept.",
-            user_message=f"Weak concepts: {weak}. Domain: {self.state.domain}",
+        weak_concepts = [r.concept for r in weak]
+        weak_details = "\n".join(
+            f"  - {r.concept}: mastery={r.mastery_score:.2f}, "
+            f"correctness={r.correctness_score:.2f}, depth={r.depth_score:.2f}, "
+            f"misconception={r.misconception_type or 'none'}"
+            for r in weak
         )
 
-        return result.get("missing_concept")
-    # ==================================
+        system = f"""You are a prerequisite gap analyst for an adaptive learning system.
+A student is consistently failing multiple concepts. Your job is to identify
+the single most likely missing prerequisite concept causing these failures.
+
+STUDENT CONTEXT:
+{self._student_context()}
+
+ANALYSIS RULES:
+1. Call check_prerequisites on the concept with the lowest mastery score
+2. Then call submit_decision with:
+   - action = "DETOUR"
+   - missing_concept = the prerequisite the student is most likely missing
+   - reason = one sentence explaining the pattern
+   
+   OR if no clear prerequisite gap exists:
+   - action = "RETEACH"
+   - reason = "No single prerequisite gap identified; recommend style change"
+
+The missing_concept field is the KEY OUTPUT — it must be a specific, teachable
+concept name (e.g. "function closures", "Newton's Second Law", "gradient descent").
+"""
+
+        result = self.run(
+            system=system,
+            user_message=(
+                f"Gap analysis: student failed {len(weak)}/3 recent concepts.\n\n"
+                f"Weak concepts:\n{weak_details}\n\n"
+                f"Domain: {self.state.domain}\n"
+                f"Identify the most likely missing prerequisite."
+            ),
+            model=settings.reasoning_model,
+        )
+
+        missing = result.get("missing_concept")
+        action = result.get("action", "")
+
+        if action == "DETOUR" and missing:
+            self._log_decision(
+                action="GAP_DETECTED",
+                reason=result.get("reason", f"Gap analysis found missing: {missing}"),
+                payload={"missing_concept": missing, "weak_concepts": weak_concepts},
+            )
+            logger.info("Gap analysis found missing prerequisite: '{}'", missing)
+            return missing
+
+        logger.info("Gap analysis: no clear prerequisite gap in {}", weak_concepts)
+        return None
+
 
     # ── Tool executor ─────────────────────────────────────────────────────────
 
