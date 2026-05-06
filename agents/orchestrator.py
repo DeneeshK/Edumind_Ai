@@ -74,6 +74,51 @@ class OrchestratorAgent(BaseAgent):
                 },
                 required=["session_summary", "modules_completed", "next_session_hint"],
             ),
+            self.build_tool(
+                name="route_after_evaluation",
+                description=(
+                    "Called after each module evaluation. "
+                    "Reason over the evaluation report and student state, "
+                    "then decide the next action. "
+                    "You MUST call this after every module evaluation — "
+                    "never skip it."
+                ),
+                properties={
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "MOVE_FORWARD",
+                            "RETEACH",
+                            "DETOUR",
+                            "ESCALATE",
+                            "COMPRESS",
+                            "HOLD",
+                        ],
+                        "description": (
+                            "MOVE_FORWARD: mastery sufficient, go to next module. "
+                            "RETEACH: mastery insufficient, retry with different style. "
+                            "DETOUR: prerequisite gap detected, insert a prereq module. "
+                            "ESCALATE: repeated failures, rebuild curriculum. "
+                            "COMPRESS: student far ahead, accelerate. "
+                            "HOLD: student requests pause."
+                        ),
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "One sentence explaining why you chose this action",
+                    },
+                    "style_for_reteach": {
+                        "type": "string",
+                        "enum": ["formal", "socratic", "example_first", "visual", "story"],
+                        "description": "Only required when action=RETEACH. Which style to switch to.",
+                    },
+                    "missing_concept": {
+                        "type": "string",
+                        "description": "Only required when action=DETOUR. The prerequisite concept name.",
+                    },
+                },
+                required=["action", "reason"],
+            ),
         ]
 
     # ── Tool executor ─────────────────────────────────────────────────────────
@@ -83,8 +128,79 @@ class OrchestratorAgent(BaseAgent):
             modules_to_cover = args.get("modules_to_cover", [])
             session_goal = args.get("session_goal", "")
             logger.info("Session plan: {} modules, goal='{}'", len(modules_to_cover), session_goal)
-            return f"Session planned: covering {modules_to_cover}. Goal: {session_goal}"
+            return "Session planned: covering " + str(modules_to_cover) + ". Goal: " + session_goal
+
+        if tool_name == "route_after_evaluation":
+            # Store routing decision so _run_module_loop can read it
+            self._last_route = args
+            action = args.get("action", "")
+            reason = args.get("reason", "")
+            logger.info("LLM routing decision: action={} reason='{}'", action, reason)
+            return "Routing decision recorded: " + action
+
         return super()._execute_tool(tool_name, args)
+
+    # ── LLM routing ───────────────────────────────────────────────────────────
+
+    def _llm_route(self, module_concept: str, report_summary: str) -> dict:
+        """
+        Ask the Orchestrator LLM to reason over the evaluation result
+        and current student state, then call route_after_evaluation.
+
+        This replaces the Python if/else chain — the LLM is now the
+        decision-maker for every post-evaluation routing step.
+
+        Returns the args dict from the route_after_evaluation tool call.
+        """
+        self._last_route = {}
+
+        mastery_threshold = {
+            "fast": 0.60, "medium": 0.72, "deep": 0.85
+        }.get(self.state.pace, 0.72)
+
+        consecutive = self.state.metacognition.consecutive_reteach_count
+        eval_count = self.state.evaluation_cycle_count
+
+        system = (
+            "You are the Orchestrator of an adaptive learning system. "
+            "Your ONLY job right now is to call route_after_evaluation "
+            "with the correct action based on the evidence below. "
+            "Do not explain. Do not ask questions. Call the tool immediately.\n\n"
+            "ROUTING RULES:\n"
+            "- mastery >= " + str(mastery_threshold) + " AND no critical misconception -> MOVE_FORWARD\n"
+            "- mastery < " + str(mastery_threshold) + " AND consecutive_reteach < 3 -> RETEACH\n"
+            "- misconception_type = prerequisite_gap -> DETOUR (name the missing concept)\n"
+            "- consecutive_reteach >= 3 -> ESCALATE\n"
+            "- mastery >= 0.90 and student answered quickly -> COMPRESS\n"
+            "- student explicitly asked to stop -> HOLD\n\n"
+            "STUDENT STATE:\n"
+            + self._student_context() + "\n"
+            "consecutive_reteach_count: " + str(consecutive) + "\n"
+            "mastery_threshold_for_pace: " + str(mastery_threshold) + "\n"
+            "evaluation_cycle: " + str(eval_count) + "\n"
+        )
+
+        user_msg = (
+            "Evaluation result for concept: '" + module_concept + "'\n"
+            + report_summary
+            + "\n\nCall route_after_evaluation now."
+        )
+
+        self.run(
+            system=system,
+            user_message=user_msg,
+            model=settings.reasoning_model,
+        )
+
+        if not self._last_route:
+            # LLM failed to call the tool — apply safe fallback
+            logger.warning("LLM did not call route_after_evaluation — defaulting to RETEACH")
+            self._last_route = {
+                "action": "RETEACH",
+                "reason": "Routing fallback: LLM did not return a tool call.",
+            }
+
+        return self._last_route
 
     # ── Layer 1: Onboarding ───────────────────────────────────────────────────
 
@@ -202,35 +318,55 @@ class OrchestratorAgent(BaseAgent):
             # Update metacognition style score with post-eval depth
             self.state.metacognition.record_style_depth(style_used, report.depth_score)
 
-            # ── Adapt ──────────────────────────────────────────────────────────
+            # ── AdaptationEngine: deep metacognitive decision ──────────────────
+            # AdaptationEngine runs its own agentic tool loop to decide the
+            # recommended action. Its output feeds the Orchestrator LLM as
+            # evidence — the Orchestrator makes the FINAL routing call.
             try:
                 engine = AdaptationEngine(self.state)
-                decision = engine.decide(report)
+                engine_decision = engine.decide(report)
+                engine_summary = (
+                    "AdaptationEngine recommended: " + engine_decision.action
+                    + " | reason: " + engine_decision.reason
+                )
             except Exception as exc:
                 logger.error("AdaptationEngine.decide() failed: {}", exc)
-                print(f"\n⚠️  Adaptation decision failed ({exc}). Defaulting to RETEACH.")
-                from core.student_model import AdaptationDecision
-                decision = AdaptationDecision(
-                    action="RETEACH",
-                    reason="Adaptation engine error — defaulting to reteach.",
-                )
+                engine_summary = "AdaptationEngine failed — use evaluation scores only."
 
             # ── Gap analysis (every 3 evaluation cycles) ───────────────────────
-            # Called on the SAME engine instance so it has the correct self.state
             try:
                 gap_concept = engine.run_gap_analysis()
                 if gap_concept:
-                    print(f"\n🔍 Gap analysis detected missing prerequisite: '{gap_concept}'")
-                    print(f"   A micro-session on '{gap_concept}' will run at your next session start.")
-                    # Record for next-session injection (stored in decision_log via _log_decision
-                    # inside run_gap_analysis itself; Orchestrator reads it at session start)
+                    print(f"\n🔍 Gap analysis: missing prerequisite '{gap_concept}'")
+                    engine_summary += " | Gap detected: " + gap_concept
             except Exception as exc:
                 logger.warning("run_gap_analysis() failed (non-critical): {}", exc)
+                gap_concept = None
 
-            print(f"\n⚙️  Decision: {decision.action} — {decision.reason}")
+            # ── Orchestrator LLM routing (TRULY AGENTIC) ──────────────────────
+            # The LLM reasons over: evaluation report + engine recommendation
+            # + student metacognition + mastery threshold for pace.
+            # It calls route_after_evaluation to emit its decision.
+            # This is the key architectural fix: routing is emergent from
+            # LLM reasoning, not hardcoded Python if/else.
+            report_summary = (
+                "mastery_score: " + str(round(report.mastery_score, 2)) + "\n"
+                "correctness: " + str(round(report.correctness_score, 2)) + "\n"
+                "depth: " + str(round(report.depth_score, 2)) + "\n"
+                "misconception_type: " + str(report.misconception_type or "none") + "\n"
+                "misconception_detail: " + str(report.misconception_detail or "none") + "\n"
+                "confidence_stated: " + str(report.confidence_stated) + "\n"
+                "calibration_delta: " + str(round(report.calibration_delta, 2)) + "\n"
+                + engine_summary
+            )
+            route = self._llm_route(module.concept, report_summary)
+            action = route.get("action", "RETEACH")
+            reason = route.get("reason", "")
 
-            # ── Apply decision ─────────────────────────────────────────────────
-            if decision.action in ("MOVE_FORWARD", "MOVE_FORWARD_WITH_FLAG"):
+            print(f"\n⚙️  Orchestrator decision: {action} — {reason}")
+
+            # ── Apply routing decision ─────────────────────────────────────────
+            if action in ("MOVE_FORWARD", "MOVE_FORWARD_WITH_FLAG"):
                 completed.append(module.id)
                 curriculum.current_index += 1
                 self.state.mark_dirty("curriculum")
@@ -238,17 +374,17 @@ class OrchestratorAgent(BaseAgent):
                 modules_done += 1
                 print(f"✅ '{module.concept}' mastered! Moving forward.\n")
 
-            elif decision.action == "RETEACH":
+            elif action == "RETEACH":
                 self.state.metacognition.consecutive_reteach_count += 1
-                new_style = decision.style_for_reteach
+                new_style = route.get("style_for_reteach")
                 if new_style:
                     self.state.metacognition.preferred_style = new_style
                     print(f"🔄 Reteaching '{module.concept}' using '{new_style}' style.\n")
                 else:
                     print(f"🔄 Reteaching '{module.concept}'.\n")
 
-            elif decision.action == "DETOUR":
-                missing_concept = decision.missing_concept
+            elif action == "DETOUR":
+                missing_concept = route.get("missing_concept")
                 if missing_concept:
                     print(f"↩️  Detour — must learn '{missing_concept}' first.\n")
                     from core.student_model import Module as CurrModule
@@ -268,7 +404,7 @@ class OrchestratorAgent(BaseAgent):
                     self.state.metacognition.consecutive_reteach_count += 1
                     print(f"🔄 Detour requested but no concept specified — reteaching.\n")
 
-            elif decision.action == "ESCALATE":
+            elif action == "ESCALATE":
                 print(f"\n🚨 '{module.concept}' could not be mastered after repeated attempts.")
                 print("   Rebuilding curriculum from this point...\n")
                 try:
@@ -303,14 +439,14 @@ class OrchestratorAgent(BaseAgent):
                     self.state.mark_dirty("curriculum")
                     modules_done += 1
 
-            elif decision.action == "COMPRESS":
+            elif action == "COMPRESS":
                 print(f"⚡ Compressing — student is ahead. Accelerating.\n")
                 completed.append(module.id)
                 curriculum.current_index += 1
                 self.state.mark_dirty("curriculum")
                 modules_done += 1
 
-            elif decision.action == "HOLD":
+            elif action == "HOLD":
                 print(f"\n⏸️  Session paused at student request.")
                 break
 
