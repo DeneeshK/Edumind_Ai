@@ -340,17 +340,68 @@ class OrchestratorAgent(BaseAgent):
             print(f"   Next: {hint}")
         print(f"{'='*60}\n")
     
-    # provide a short focused worked example
-    def _inject_micro_example(self, concept: str):
-        from agents.tutor import TutorAgent
+    # ── Micro-example injection ───────────────────────────────────────────────
 
-        tutor = TutorAgent(self.state)
+    def _inject_micro_example(self, concept: str) -> None:
+        """
+        Stream a short, focused worked example directly to stdout.
 
-        tutor.run(
-            system="Provide a short, focused worked example to clarify this concept.",
-            user_message=f"Concept: {concept}. Give one clear worked example."
+        This is a GENERATION task, not an agentic task — the LLM produces
+        a single coherent worked example. We use stream() directly so:
+          1. Output reaches the student token-by-token with no buffering delay.
+          2. We avoid the TutorAgent's tool-call loop, which expects a
+             finish_lesson tool call that a raw micro-example prompt will
+             never trigger correctly.
+          3. The example length and structure is driven purely by the prompt,
+             not by tool schema constraints.
+
+        Raises nothing — caller already wraps this in try/except.
+        """
+        from clients.groq_client import stream, GroqTimeoutError, GroqRateLimitError
+
+        preferred_style = self.state.metacognition.preferred_style or "example_first"
+        domain = self.state.domain
+
+        system = (
+            f"You are a precise, concise tutor for a student learning {domain}.\n"
+            f"The student's preferred learning style is: {preferred_style}.\n"
+            f"Write ONE clear, self-contained worked example for the concept below.\n\n"
+            f"FORMAT RULES:\n"
+            f"- Start directly with the example — no preamble\n"
+            f"- Show the problem, step-by-step reasoning, and final answer\n"
+            f"- Keep it under 200 words\n"
+            f"- Use the student's domain framing ({domain})\n"
+            f"- End with one sentence explaining WHY each step works"
         )
-    # ====================================================
+
+        messages = [{"role": "user", "content": f"Worked example for: {concept}"}]
+
+        print(f"\n{'─'*50}")
+        print(f"📌 Worked Example: {concept}")
+        print(f"{'─'*50}\n")
+
+        try:
+            full_text = []
+            for chunk in stream(messages=messages, system=system,
+                                model=settings.generation_model):
+                print(chunk, end="", flush=True)
+                full_text.append(chunk)
+            print("\n")
+
+            logger.info(
+                "Micro-example injected for concept='{}' ({} chars)",
+                concept, sum(len(c) for c in full_text)
+            )
+
+        except GroqTimeoutError:
+            logger.warning("Micro-example stream timed out for concept='{}'", concept)
+            print(f"\n[Worked example unavailable — Groq timeout]\n")
+
+        except GroqRateLimitError:
+            logger.warning("Micro-example rate-limited for concept='{}'", concept)
+            print(f"\n[Worked example unavailable — rate limit]\n")
+
+
     # ── Main entry point ──────────────────────────────────────────────────────
 
     async def run_session(self, student_id: str, is_new: bool = False) -> None:
