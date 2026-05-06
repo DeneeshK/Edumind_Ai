@@ -269,12 +269,39 @@ class OrchestratorAgent(BaseAgent):
                     print(f"🔄 Detour requested but no concept specified — reteaching.\n")
 
             elif decision.action == "ESCALATE":
-                print(f"\n🚨 Escalating '{module.concept}' — too many reteach cycles.")
-                print(f"   Logging for instructor review. Moving to next module.\n")
-                completed.append(module.id)
-                curriculum.current_index += 1
-                self.state.mark_dirty("curriculum")
-                modules_done += 1
+                print(f"\n🚨 '{module.concept}' could not be mastered after repeated attempts.")
+                print("   Rebuilding curriculum from this point...\n")
+                try:
+                    architect = CurriculumArchitectAgent(self.state)
+                    escalate_topic = (
+                        f"Prerequisite foundation for: {module.concept} "
+                        f"in {self.state.domain}"
+                    )
+                    new_plan = await architect.build_curriculum(escalate_topic)
+                    # Replace remaining modules from current index onward
+                    # with the newly built remedial curriculum
+                    curriculum.modules = (
+                        curriculum.modules[:curriculum.current_index]
+                        + new_plan.modules
+                    )
+                    self.state.mark_dirty("curriculum")
+                    logger.info(
+                        "ESCALATE: rebuilt curriculum from index {} "
+                        "with {} remedial modules for concept='{}'",
+                        curriculum.current_index,
+                        len(new_plan.modules),
+                        module.concept,
+                    )
+                    print(f"   New remedial path: {len(new_plan.modules)} modules built.\n")
+                except Exception as exc:
+                    # Fallback: advance past the blocking concept so the
+                    # session is not permanently stuck
+                    logger.error("ESCALATE curriculum rebuild failed: {} — advancing", exc)
+                    print("   Rebuild failed — skipping concept to avoid session lock.\n")
+                    completed.append(module.id)
+                    curriculum.current_index += 1
+                    self.state.mark_dirty("curriculum")
+                    modules_done += 1
 
             elif decision.action == "COMPRESS":
                 print(f"⚡ Compressing — student is ahead. Accelerating.\n")
