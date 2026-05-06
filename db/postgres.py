@@ -158,27 +158,42 @@ CREATE TABLE IF NOT EXISTS module_embeddings (
 """
 
 
-async def init_db() -> None:
+async def init_db(max_retries: int = 5, retry_delay: float = 2.0) -> None:
     """
     Create the connection pool and run the schema DDL.
+    Retries up to max_retries times with exponential backoff —
+    handles the common case where PostgreSQL is still starting
+    when the application launches (e.g. Docker Compose startup order).
     Call once at application startup.
     """
+    import asyncio as _asyncio
     global _pool
 
-    # Strip asyncpg+dialect prefix if present (SQLAlchemy URL style)
     raw_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
 
-    logger.info("Creating asyncpg pool (size={})…", settings.db_pool_size)
-    _pool = await asyncpg.create_pool(
-        dsn=raw_url,
-        min_size=1,
-        max_size=settings.db_pool_size,
-    )
-
-    async with get_conn() as conn:
-        await conn.execute(_SCHEMA_SQL)
-
-    logger.info("DB pool ready and schema applied.")
+    for attempt in range(1, max_retries + 1):
+        try:
+            logger.info(
+                "Connecting to DB (attempt {}/{}, pool_size={})…",
+                attempt, max_retries, settings.db_pool_size
+            )
+            _pool = await asyncpg.create_pool(
+                dsn=raw_url,
+                min_size=1,
+                max_size=settings.db_pool_size,
+            )
+            async with get_conn() as conn:
+                await conn.execute(_SCHEMA_SQL)
+            logger.info("DB pool ready and schema applied.")
+            return
+        except Exception as e:
+            logger.warning("DB connection attempt {}/{} failed: {}", attempt, max_retries, e)
+            if attempt == max_retries:
+                logger.error("All {} DB connection attempts failed. Giving up.", max_retries)
+                raise
+            wait = retry_delay * (2 ** (attempt - 1))  # exponential backoff
+            logger.info("Retrying in {:.1f}s…", wait)
+            await _asyncio.sleep(wait)
 
 
 async def close_db() -> None:
