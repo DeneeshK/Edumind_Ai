@@ -124,6 +124,9 @@ class OrchestratorAgent(BaseAgent):
     async def _run_module_loop(self) -> list[str]:
         """
         Teach → Evaluate → Adapt loop for all curriculum modules.
+
+        Each agent call is wrapped in a try/except so a single failure
+        (Groq timeout, DB error) cannot silently discard session state.
         Returns list of completed module IDs.
         """
         completed = []
@@ -146,49 +149,88 @@ class OrchestratorAgent(BaseAgent):
             print(f"{'─'*60}")
 
             # ── Teach ─────────────────────────────────────────────────────────
-            tutor = TutorAgent(self.state)
-            lesson_result = tutor.teach()
+            try:
+                tutor = TutorAgent(self.state)
+                lesson_result = tutor.teach()
+            except Exception as exc:
+                logger.error("TutorAgent.teach() failed for '{}': {}", module.concept, exc)
+                print(f"\n⚠️  Lesson delivery failed ({exc}). Skipping to evaluation with partial context.")
+                lesson_result = {"style_used": "formal", "fatigue_detected": "no", "doubt_count": 0}
 
-            # ===== DOUBT COUNT TRIGGER  =====
+            # ── Doubt count trigger (micro-example injection) ─────────────────
             doubt_count = self.state.get_doubt_count(module.concept)
-
             if doubt_count >= 2:
-                print(f"\n💡 You asked {doubt_count} doubts on '{module.concept}'. Injecting micro-example...\n")
-                self._inject_micro_example(module.concept)
-            # =========================================
+                print(f"\n💡 You raised {doubt_count} doubts on '{module.concept}'. Injecting a worked example…\n")
+                try:
+                    self._inject_micro_example(module.concept)
+                except Exception as exc:
+                    logger.warning("Micro-example injection failed: {}", exc)
 
-            # Update style depth score after teach (will be scored post-eval)
             style_used = lesson_result.get("style_used", "formal")
 
-            # ── Get confidence ────────────────────────────────────────────────
-            print(f"\n How confident are you in '{module.concept}'? (1-5): ", end="")
+            # ── Confidence rating ─────────────────────────────────────────────
+            print(f"\n📊 How confident are you about '{module.concept}'? (1–5): ", end="")
             try:
                 confidence = int(input().strip())
                 confidence = max(1, min(5, confidence))
-            except ValueError:
+            except (ValueError, EOFError):
                 confidence = 3
 
             # ── Evaluate ──────────────────────────────────────────────────────
-            evaluator = EvaluatorAgent(self.state)
-            report = await evaluator.evaluate(module.concept, confidence)
+            try:
+                evaluator = EvaluatorAgent(self.state)
+                report = await evaluator.evaluate(module.concept, confidence)
+            except Exception as exc:
+                logger.error("EvaluatorAgent.evaluate() failed for '{}': {}", module.concept, exc)
+                print(f"\n⚠️  Evaluation failed ({exc}). Recording zero mastery and reteaching.")
+                # Safe fallback: build a zero-score report so adaptation can still run
+                from core.student_model import EvaluationReport
+                report = EvaluationReport(
+                    concept=module.concept,
+                    session_id=self.state.session_id,
+                    correctness_score=0.0,
+                    depth_score=0.0,
+                    mastery_score=0.0,
+                    misconception_type=None,
+                    misconception_detail="Evaluation failed due to system error.",
+                    confidence_stated=confidence,
+                    calibration_delta=confidence / 5,
+                    questions_asked=0,
+                    recommended_action="RETEACH",
+                )
 
             # Update metacognition style score with post-eval depth
             self.state.metacognition.record_style_depth(style_used, report.depth_score)
 
-            # ── Adapt ─────────────────────────────────────────────────────────
-            engine = AdaptationEngine(self.state)
-            decision = engine.decide(report)
+            # ── Adapt ──────────────────────────────────────────────────────────
+            try:
+                engine = AdaptationEngine(self.state)
+                decision = engine.decide(report)
+            except Exception as exc:
+                logger.error("AdaptationEngine.decide() failed: {}", exc)
+                print(f"\n⚠️  Adaptation decision failed ({exc}). Defaulting to RETEACH.")
+                from core.student_model import AdaptationDecision
+                decision = AdaptationDecision(
+                    action="RETEACH",
+                    reason="Adaptation engine error — defaulting to reteach.",
+                )
 
-            # ===== GAP ANALYSIS TRIGGER =====
-            missing = AdaptationEngine.run_gap_analysis()
-
-            if missing:
-                print(f"\n🔍 Gap detected: {missing}\n")
-            # =================================
+            # ── Gap analysis (every 3 evaluation cycles) ───────────────────────
+            # Called on the SAME engine instance so it has the correct self.state
+            try:
+                gap_concept = engine.run_gap_analysis()
+                if gap_concept:
+                    print(f"\n🔍 Gap analysis detected missing prerequisite: '{gap_concept}'")
+                    print(f"   A micro-session on '{gap_concept}' will run at your next session start.")
+                    # Record for next-session injection (stored in decision_log via _log_decision
+                    # inside run_gap_analysis itself; Orchestrator reads it at session start)
+            except Exception as exc:
+                logger.warning("run_gap_analysis() failed (non-critical): {}", exc)
 
             print(f"\n⚙️  Decision: {decision.action} — {decision.reason}")
 
-            if decision.action == "MOVE_FORWARD" or decision.action == "MOVE_FORWARD_WITH_FLAG":
+            # ── Apply decision ─────────────────────────────────────────────────
+            if decision.action in ("MOVE_FORWARD", "MOVE_FORWARD_WITH_FLAG"):
                 completed.append(module.id)
                 curriculum.current_index += 1
                 self.state.mark_dirty("curriculum")
@@ -198,35 +240,44 @@ class OrchestratorAgent(BaseAgent):
 
             elif decision.action == "RETEACH":
                 self.state.metacognition.consecutive_reteach_count += 1
-                print(f"🔄 Reteaching '{module.concept}' using {decision.style_for_reteach} style.\n")
-                if decision.style_for_reteach:
-                    self.state.metacognition.preferred_style = decision.style_for_reteach
+                new_style = decision.style_for_reteach
+                if new_style:
+                    self.state.metacognition.preferred_style = new_style
+                    print(f"🔄 Reteaching '{module.concept}' using '{new_style}' style.\n")
+                else:
+                    print(f"🔄 Reteaching '{module.concept}'.\n")
 
             elif decision.action == "DETOUR":
-                missing = decision.missing_concept
-                print(f"↩️  Detour — must learn '{missing}' first.\n")
-                # Insert detour module at current position
-                from core.student_model import Module as CurrModule
-                detour = CurrModule(
-                    id=f"detour_{missing}",
-                    title=f"Prerequisite: {missing}",
-                    concept=missing,
-                    domain_framing=f"{missing} in {self.state.domain}",
-                    prerequisites=[],
-                    estimated_minutes=10,
-                    depth_level="surface",
-                )
-                curriculum.modules.insert(curriculum.current_index, detour)
+                missing_concept = decision.missing_concept
+                if missing_concept:
+                    print(f"↩️  Detour — must learn '{missing_concept}' first.\n")
+                    from core.student_model import Module as CurrModule
+                    detour = CurrModule(
+                        id=f"detour_{missing_concept.replace(' ', '_')}",
+                        title=f"Prerequisite: {missing_concept}",
+                        concept=missing_concept,
+                        domain_framing=f"{missing_concept} in {self.state.domain}",
+                        prerequisites=[],
+                        estimated_minutes=10,
+                        depth_level="surface",
+                    )
+                    curriculum.modules.insert(curriculum.current_index, detour)
+                    self.state.mark_dirty("curriculum")
+                else:
+                    logger.warning("DETOUR decision has no missing_concept — treating as RETEACH")
+                    self.state.metacognition.consecutive_reteach_count += 1
+                    print(f"🔄 Detour requested but no concept specified — reteaching.\n")
 
             elif decision.action == "ESCALATE":
-                print(f"\n🚨 ESCALATE: This concept needs human instructor support.")
-                print(f"   Please review '{module.concept}' with your instructor.")
+                print(f"\n🚨 Escalating '{module.concept}' — too many reteach cycles.")
+                print(f"   Logging for instructor review. Moving to next module.\n")
                 completed.append(module.id)
                 curriculum.current_index += 1
+                self.state.mark_dirty("curriculum")
                 modules_done += 1
 
             elif decision.action == "COMPRESS":
-                print(f"⚡ Compressing — student is ahead, skipping to next module.\n")
+                print(f"⚡ Compressing — student is ahead. Accelerating.\n")
                 completed.append(module.id)
                 curriculum.current_index += 1
                 self.state.mark_dirty("curriculum")
@@ -242,6 +293,7 @@ class OrchestratorAgent(BaseAgent):
                 break
 
         return completed
+
 
     # ── Layer 3: Session end ──────────────────────────────────────────────────
 
