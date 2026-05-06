@@ -1,15 +1,19 @@
 """
 clients/tavily_client.py
-search()          — single query, session-cached, returns list[dict]
+search()          — single query, TTL-cached (24h), returns list[dict]
 search_multiple() — multiple queries deduplicated, returns list[dict]
 
-Session cache: {hash(query): result} — resets when module is reloaded
-10s timeout, returns [] on any failure (never crashes the caller)
+TTL cache: results persist across sessions for 24 hours.
+Same concept queried in a new session costs 0 Tavily API calls.
+10s timeout, returns [] on any failure (never crashes the caller).
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
+import time
+from pathlib import Path
 from typing import Any
 
 from tavily import TavilyClient
@@ -18,14 +22,50 @@ from loguru import logger
 from config import settings
 
 
-# ── Session-scoped cache ──────────────────────────────────────────────────────
-# Lives for the duration of the Python process (one student session)
-_cache: dict[str, list[dict]] = {}
+# ── TTL cache config ──────────────────────────────────────────────────────────
+# 24-hour TTL: concept content changes rarely enough that one day is safe.
+_TTL_SECONDS = 86_400  # 24 hours
+
+# Persist cache to disk so it survives process restarts.
+# Stored alongside ChromaDB so both are cleared together if needed.
+_CACHE_PATH = Path(settings.chromadb_path) / "tavily_cache.json"
+
+# In-memory layer: {key: {"results": [...], "expires_at": float}}
+_cache: dict[str, dict] = {}
+_cache_loaded = False
+
+
+def _load_cache() -> None:
+    """Load disk cache into memory once at first use."""
+    global _cache, _cache_loaded
+    if _cache_loaded:
+        return
+    _cache_loaded = True
+    if _CACHE_PATH.exists():
+        try:
+            raw = json.loads(_CACHE_PATH.read_text())
+            now = time.time()
+            # Drop expired entries on load
+            _cache = {k: v for k, v in raw.items() if v.get("expires_at", 0) > now}
+            logger.info("Tavily cache loaded: {} valid entries", len(_cache))
+        except Exception as e:
+            logger.warning("Tavily cache load failed: {} — starting fresh", e)
+            _cache = {}
+
+
+def _save_cache() -> None:
+    """Persist current cache to disk. Silent on failure."""
+    try:
+        _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CACHE_PATH.write_text(json.dumps(_cache))
+    except Exception as e:
+        logger.warning("Tavily cache save failed: {}", e)
+
 
 # ── Client singleton ──────────────────────────────────────────────────────────
 _client: TavilyClient | None = None
 
-def get_client() -> TavilyClient:
+def _get_client() -> TavilyClient:
     global _client
     if _client is None:
         _client = TavilyClient(api_key=settings.tavily_api_key)
@@ -43,26 +83,35 @@ def search(query: str, max_results: int = 5) -> list[dict]:
     Search Tavily for query. Returns list of result dicts:
       [{"title": ..., "url": ..., "content": ...}, ...]
 
-    - Session-cached: same query in same session costs 0 API calls
+    - TTL-cached for 24 hours across sessions
     - Returns [] on any error (caller degrades gracefully)
     - 10s timeout enforced by Tavily client
     """
+    _load_cache()
     key = _cache_key(query)
-    if key in _cache:
-        logger.debug("Tavily cache hit: '{}'", query[:60])
-        return _cache[key]
+    now = time.time()
+
+    entry = _cache.get(key)
+    if entry and entry.get("expires_at", 0) > now:
+        logger.debug("Tavily TTL cache hit: '{}'", query[:60])
+        return entry["results"]
 
     try:
-        client = get_client()
-        logger.info("Tavily search: '{}'", query[:80])
+        client = _get_client()
+        logger.info("Tavily API call: '{}'", query[:80])
         response = client.search(
             query=query,
             max_results=max_results,
             search_depth="basic",
         )
         results = response.get("results", [])
-        _cache[key] = results
-        logger.info("Tavily returned {} results for '{}'", len(results), query[:60])
+        _cache[key] = {
+            "results": results,
+            "expires_at": now + _TTL_SECONDS,
+            "query": query[:120],  # stored for debug inspection
+        }
+        _save_cache()
+        logger.info("Tavily: {} results for '{}' (cached 24h)", len(results), query[:60])
         return results
 
     except Exception as e:
@@ -76,8 +125,6 @@ def search_multiple(queries: list[str], max_results_each: int = 3) -> list[dict]
     """
     Run multiple search queries and return deduplicated results.
     Deduplication is by URL.
-
-    Used by Curriculum Architect which fires 2-3 queries for better coverage.
     """
     seen_urls: set[str] = set()
     combined: list[dict] = []
@@ -91,7 +138,7 @@ def search_multiple(queries: list[str], max_results_each: int = 3) -> list[dict]
                 combined.append(r)
 
     logger.info(
-        "search_multiple: {} queries → {} unique results",
+        "search_multiple: {} queries -> {} unique results",
         len(queries), len(combined)
     )
     return combined
@@ -99,8 +146,23 @@ def search_multiple(queries: list[str], max_results_each: int = 3) -> list[dict]
 
 # ── clear_cache() ─────────────────────────────────────────────────────────────
 
-def clear_cache() -> None:
-    """Call at session end to free memory."""
+def clear_cache(expired_only: bool = True) -> None:
+    """
+    Clear the in-memory cache.
+
+    Args:
+        expired_only: if True (default), only remove expired entries.
+                      if False, wipe everything (use for testing only).
+    """
     global _cache
-    _cache = {}
-    logger.debug("Tavily session cache cleared.")
+    if expired_only:
+        now = time.time()
+        before = len(_cache)
+        _cache = {k: v for k, v in _cache.items() if v.get("expires_at", 0) > now}
+        removed = before - len(_cache)
+        if removed:
+            logger.debug("Tavily cache: removed {} expired entries", removed)
+    else:
+        _cache = {}
+        _save_cache()
+        logger.debug("Tavily cache fully cleared.")
