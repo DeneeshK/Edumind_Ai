@@ -404,6 +404,77 @@ class OrchestratorAgent(BaseAgent):
 
     # ── Main entry point ──────────────────────────────────────────────────────
 
+    async def _check_cross_session_doubts(self) -> None:
+        """
+        Query doubt_log for concepts doubted across >= 2 distinct sessions.
+        If a concept has 3+ cross-session doubts, prepend a prerequisite
+        detour module at the front of the current curriculum so it is
+        addressed immediately at session start.
+        """
+        from db.postgres import get_conn
+        from core.student_model import Module as CurrModule
+
+        try:
+            async with get_conn() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT concept, SUM(count) as total_doubts,
+                           COUNT(DISTINCT session_id) as session_count
+                    FROM doubt_log
+                    WHERE student_id = $1
+                    GROUP BY concept
+                    HAVING COUNT(DISTINCT session_id) >= 2
+                      AND SUM(count) >= 3
+                    ORDER BY total_doubts DESC
+                    LIMIT 3
+                    """,
+                    self.state.student_id,
+                )
+        except Exception as e:
+            logger.warning("Cross-session doubt query failed: {} — skipping", e)
+            return
+
+        if not rows:
+            return
+
+        curriculum = self.state.curriculum
+        inserted = 0
+        for row in rows:
+            concept = row["concept"]
+            # Don't insert if this concept is already the current or next module
+            current_concepts = {
+                m.concept for m in curriculum.modules[curriculum.current_index:]
+            }
+            if concept in current_concepts:
+                continue
+
+            detour = CurrModule(
+                id="cross_session_detour_" + concept.replace(" ", "_")[:40],
+                title="Revisit: " + concept,
+                concept=concept,
+                domain_framing=concept + " in " + self.state.domain,
+                prerequisites=[],
+                estimated_minutes=10,
+                depth_level="surface",
+            )
+            curriculum.modules.insert(curriculum.current_index, detour)
+            self.state.mark_dirty("curriculum")
+            inserted += 1
+            logger.info(
+                "Cross-session gap: prepended revisit module for concept='{}'",
+                concept
+            )
+            print(
+                "\n🔁 Persistent gap detected: '" + concept + "' "
+                "will be revisited this session.\n"
+            )
+
+        if inserted > 0:
+            logger.info(
+                "{} cross-session gap module(s) prepended for student='{}'",
+                inserted, self.state.student_id
+            )
+
     async def run_session(self, student_id: str, is_new: bool = False) -> None:
         """
         Run a complete learning session.
@@ -414,6 +485,13 @@ class OrchestratorAgent(BaseAgent):
         """
         self.state.start_session()
         topic = ""
+
+        # ── Cross-session doubt detection ─────────────────────────────────────
+        # Reads doubt_log to find concepts the student has doubted across
+        # multiple sessions — a signal of a persistent knowledge gap.
+        # If found, a prerequisite detour module is prepended before the loop.
+        if not is_new and self.state.curriculum:
+            await self._check_cross_session_doubts()
 
         # ── Layer 1: Onboarding (first session only) ──────────────────────────
         if is_new or not self.state.curriculum:
