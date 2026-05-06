@@ -157,6 +157,11 @@ class StudentState(BaseModel):
     session_doubt_counts: dict[str, int] = Field(default_factory=dict)
     session_decisions: list[AdaptationDecision] = Field(default_factory=list)
     session_response_times: list[float] = Field(default_factory=list)
+    # In-memory log of EvaluationReports for this session.
+    # Populated by EvaluatorAgent after each evaluation.
+    # Used by AdaptationEngine.run_gap_analysis() — never persisted here
+    # (persisted separately to evaluation_history table by write_evaluation()).
+    evaluation_history: list["EvaluationReport"] = Field(default_factory=list)
     evaluation_cycle_count: int = 0
     session_started_at: Optional[datetime] = None
 
@@ -215,6 +220,7 @@ class StudentState(BaseModel):
         self.session_doubt_counts = {}
         self.session_decisions = []
         self.session_response_times = []
+        self.evaluation_history = []
         self.evaluation_cycle_count = 0
         self.session_started_at = datetime.utcnow()
         return self.session_id
@@ -247,23 +253,8 @@ class StudentState(BaseModel):
                 goal=row["goal"],
                 pace=row["pace"],
             )
-            # ===== METACOGNITION LOAD =====
+
             import json
-
-            try:
-                meta_row = await conn.fetchrow(
-                    "SELECT profile_json FROM metacognition WHERE student_id=$1",
-                    student_id
-                )
-
-                if meta_row and meta_row["profile_json"]:
-                    meta_data = json.loads(meta_row["profile_json"])
-                    state.metacognition = MetacognitionProfile(**meta_data)
-
-            except Exception as e:
-                print(f"[WARN] Failed to load metacognition: {e}")
-                state.metacognition = MetacognitionProfile()
-            # =============================================
 
             # Concept mastery
             mastery_rows = await conn.fetch(
