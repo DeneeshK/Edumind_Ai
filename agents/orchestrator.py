@@ -463,33 +463,31 @@ class OrchestratorAgent(BaseAgent):
     async def _end_session(self, completed_modules: list[str]) -> None:
         """Flush all session data to DB atomically."""
 
-        # Generate summary — use generation model, but handle tool-skip gracefully
-        result = self.run(
-            system=(
-                "You are ending a learning session. "
-                "Generate a helpful session summary and call end_session."
-            ),
-            user_message=(
-                f"Session complete. Student: {self.state.name}. "
-                f"Modules completed: {completed_modules}. "
-                f"Domain: {self.state.domain}. "
-                f"Decisions this session: "
-                f"{[d.get('action') for d in self.state.session_decisions]}. "
-                f"Generate a plain-English summary."
-            ),
+        # Use plain generate() with NO tools — no tool definitions means
+        # the LLM cannot accidentally trigger a new routing cycle.
+        # It can only return a plain text summary.
+        from clients.groq_client import generate as groq_generate
+        decisions_taken = [d.get("action") for d in self.state.session_decisions] \
+            if self.state.session_decisions and isinstance(self.state.session_decisions[0], dict) \
+            else [getattr(d, "action", "?") for d in self.state.session_decisions]
+
+        summary = await groq_generate(
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Write a 2-3 sentence plain-English learning session summary.\n"
+                    f"Student: {self.state.name}\n"
+                    f"Domain: {self.state.domain}\n"
+                    f"Modules completed: {', '.join(completed_modules) or 'none'}\n"
+                    f"Decisions this session: {decisions_taken}\n"
+                    f"Write only the summary text. No headings. No bullet points."
+                )
+            }],
             model=settings.generation_model,
+            system="You are a helpful tutor summarising a learning session. Be concise and encouraging.",
         )
 
-        # Robust fallback — works whether LLM calls tool or returns text
-        summary = (
-            result.get("session_summary")
-            or result.get("text_response")
-            or f"Covered {len(completed_modules)} module(s): "
-               f"{', '.join(completed_modules)}."
-        )
-        hint = result.get("next_session_hint", "")
-
-        # Build mastery updates list for atomic write
+        # Build mastery updates for atomic write
         mastery_updates = [
             {
                 "concept": concept,
@@ -498,11 +496,10 @@ class OrchestratorAgent(BaseAgent):
                 "depth": self.state.concept_depth.get(concept, 0.0),
             }
             for concept, score in self.state.concept_mastery.items()
-            if concept in (self.state._dirty or set())
-               or concept in completed_modules
+            if concept in completed_modules
         ]
 
-        # Single atomic transaction — all or nothing
+        # Single atomic transaction
         from db.postgres import flush_session_to_db
         await flush_session_to_db(
             student_id=self.state.student_id,
@@ -517,9 +514,7 @@ class OrchestratorAgent(BaseAgent):
 
         print(f"\n{'='*60}")
         print(f"✅ Session complete!")
-        print(f"   Summary: {summary}")
-        if hint:
-            print(f"   Next: {hint}")
+        print(f"   {summary}")
         print(f"{'='*60}\n")
     
     # ── Micro-example injection ───────────────────────────────────────────────
