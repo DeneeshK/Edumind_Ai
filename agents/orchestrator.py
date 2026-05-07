@@ -461,44 +461,63 @@ class OrchestratorAgent(BaseAgent):
     # ── Layer 3: Session end ──────────────────────────────────────────────────
 
     async def _end_session(self, completed_modules: list[str]) -> None:
-        """Flush all session data to DB."""
+        """Flush all session data to DB atomically."""
 
-        # Orchestrator LLM generates summary
+        # Generate summary — use generation model, but handle tool-skip gracefully
         result = self.run(
             system=(
                 "You are ending a learning session. "
-                "Generate a session summary and end_session tool call."
+                "Generate a helpful session summary and call end_session."
             ),
             user_message=(
                 f"Session complete. Student: {self.state.name}. "
                 f"Modules completed: {completed_modules}. "
                 f"Domain: {self.state.domain}. "
-                f"Generate a session summary."
+                f"Decisions this session: "
+                f"{[d.get('action') for d in self.state.session_decisions]}. "
+                f"Generate a plain-English summary."
             ),
             model=settings.generation_model,
         )
 
-        summary = result.get("session_summary", f"Covered {len(completed_modules)} modules.")
+        # Robust fallback — works whether LLM calls tool or returns text
+        summary = (
+            result.get("session_summary")
+            or result.get("text_response")
+            or f"Covered {len(completed_modules)} module(s): "
+               f"{', '.join(completed_modules)}."
+        )
+        hint = result.get("next_session_hint", "")
 
-        # Write session memory
-        await write_session_memory(
+        # Build mastery updates list for atomic write
+        mastery_updates = [
+            {
+                "concept": concept,
+                "mastery_score": score,
+                "correctness": self.state.concept_mastery.get(concept, score),
+                "depth": self.state.concept_depth.get(concept, 0.0),
+            }
+            for concept, score in self.state.concept_mastery.items()
+            if concept in (self.state._dirty or set())
+               or concept in completed_modules
+        ]
+
+        # Single atomic transaction — all or nothing
+        from db.postgres import flush_session_to_db
+        await flush_session_to_db(
             student_id=self.state.student_id,
             session_id=self.state.session_id,
             summary=summary,
             modules_covered=completed_modules,
             started_at=self.state.session_started_at,
+            decisions=self.state.session_decisions,
+            metacognition_json=self.state.metacognition.model_dump(),
+            mastery_updates=mastery_updates,
         )
-
-        # Flush state to DB
-        await self.state.save()
-
-        # Clear Tavily cache
-        clear_cache()
 
         print(f"\n{'='*60}")
         print(f"✅ Session complete!")
         print(f"   Summary: {summary}")
-        hint = result.get("next_session_hint", "")
         if hint:
             print(f"   Next: {hint}")
         print(f"{'='*60}\n")
