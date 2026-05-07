@@ -166,15 +166,27 @@ class EvaluatorAgent(BaseAgent):
         meta = self.state.metacognition
         reteach_count = meta.consecutive_reteach_count
 
+        # Pace-bound question count — strictly enforced in prompt
+        pace_questions = {"fast": 2, "medium": 3, "deep": 5}.get(self.state.pace, 3)
+        pace_style = {
+            "fast": "direct application questions only — no deep probing",
+            "medium": "mix of application and conceptual connection questions",
+            "deep": "full Socratic sequence: recall → application → edge cases → cross-concept",
+        }.get(self.state.pace, "balanced")
+
         system = f"""You are a Socratic evaluator for an adaptive learning system.
-Your job: assess the student's understanding of '{concept}' through 3-5 targeted questions.
+Your job: assess the student's understanding of '{concept}'.
+
+PACE CONSTRAINT (STRICTLY ENFORCED):
+- Student pace: {self.state.pace.upper()}
+- You MUST ask EXACTLY {pace_questions} question(s) — no more, no fewer
+- Style for this pace: {pace_style}
+- After exactly {pace_questions} question(s), call submit_evaluation immediately
 
 STUDENT CONTEXT:
 {self._student_context()}
 
 EVALUATION RULES:
-- Ask exactly 3-5 questions before calling submit_evaluation
-- Progress: recall → application → edge cases
 - Domain framing: {domain_framing}
 - Prior mastery score: {prior_mastery:.2f}
 - Reteach cycles so far: {reteach_count}
