@@ -125,6 +125,7 @@ class EvaluationReport(BaseModel):
 class AdaptationDecision(BaseModel):
     action: str
     reason: str
+    agent: str = "adaptation_engine"        # which agent made this decision
     style_for_reteach: Optional[str] = None
     missing_concept: Optional[str] = None   # for DETOUR
     metacognition_updates: dict[str, Any] = Field(default_factory=dict)
@@ -188,9 +189,12 @@ class StudentState(BaseModel):
     # ── Knowledge updates ────────────────────────────────────────────────────
 
     def update_mastery(self, concept: str, correctness: float, depth: float) -> None:
-        mastery = round(0.6 * correctness + 0.4 * depth, 3)
+        # Safety floor on depth prevents zero-division in derived calculations
+        # and ensures mastery never collapses to correctness-only silently
+        safe_depth = max(0.001, depth)
+        mastery = round(0.6 * correctness + 0.4 * safe_depth, 3)
         self.concept_mastery[concept] = mastery
-        self.concept_depth[concept] = round(depth, 3)
+        self.concept_depth[concept] = round(safe_depth, 3)
         self.mark_dirty("concept_mastery")
 
     def get_mastery(self, concept: str) -> float:
@@ -326,7 +330,7 @@ class StudentState(BaseModel):
                 {
                     "student_id": self.student_id,
                     "session_id": self.session_id,
-                    "agent": "adaptation_engine",
+                    "agent": getattr(d, "agent", "adaptation_engine"),
                     "action": d.action,
                     "rationale": d.reason,
                     "payload": d.model_dump(),
