@@ -333,3 +333,75 @@ async def bulk_write_decisions(decisions: list[dict]) -> None:
                 for d in decisions
             ],
         )
+
+
+async def flush_session_to_db(
+    student_id: str,
+    session_id: str,
+    summary: str,
+    modules_covered: list,
+    started_at,
+    decisions: list[dict],
+    metacognition_json: dict,
+    mastery_updates: list[dict],
+) -> None:
+    """
+    Atomically write all session-end data in a single transaction.
+    If any write fails, everything rolls back — no partial data.
+    Called by orchestrator._end_session() instead of separate writes.
+    """
+    async with get_conn() as conn:
+        async with conn.transaction():
+            # Session summary
+            await conn.execute(
+                """
+                INSERT INTO session_memory
+                  (student_id, session_id, summary_text, modules_covered, started_at)
+                VALUES ($1,$2,$3,$4,$5)
+                ON CONFLICT (session_id) DO NOTHING
+                """,
+                student_id, session_id, summary,
+                json.dumps(modules_covered), started_at,
+            )
+            # Decision log
+            if decisions:
+                await conn.executemany(
+                    """
+                    INSERT INTO decision_log
+                      (student_id, session_id, agent, action, rationale, payload_json)
+                    VALUES ($1,$2,$3,$4,$5,$6)
+                    """,
+                    [
+                        (
+                            d["student_id"], d["session_id"], d["agent"],
+                            d["action"], d.get("rationale", ""),
+                            json.dumps(d.get("payload", {})),
+                        )
+                        for d in decisions
+                    ],
+                )
+            # Metacognition
+            await conn.execute(
+                """
+                INSERT INTO metacognition (student_id, profile_json)
+                VALUES ($1, $2)
+                ON CONFLICT (student_id) DO UPDATE
+                  SET profile_json=$2, updated_at=NOW()
+                """,
+                student_id, json.dumps(metacognition_json),
+            )
+            # Mastery scores
+            for m in mastery_updates:
+                await conn.execute(
+                    """
+                    INSERT INTO concept_mastery
+                      (student_id, concept, mastery_score, correctness, depth, sessions_seen)
+                    VALUES ($1,$2,$3,$4,$5,1)
+                    ON CONFLICT (student_id, concept) DO UPDATE
+                      SET mastery_score=$3, correctness=$4, depth=$5,
+                          sessions_seen = concept_mastery.sessions_seen + 1,
+                          updated_at = NOW()
+                    """,
+                    student_id, m["concept"],
+                    m["mastery_score"], m["correctness"], m["depth"],
+                )
