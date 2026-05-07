@@ -42,7 +42,20 @@ async def main():
                 pace="medium",
             )
             orchestrator = OrchestratorAgent(state)
-            await orchestrator.run_session(student_id, is_new=True)
+            try:
+                await orchestrator.run_session(student_id, is_new=True)
+            except (KeyboardInterrupt, EOFError):
+                # Only save if onboarding completed (domain was set)
+                if state.domain and state.goal:
+                    logger.info("Session interrupted — saving partial state.")
+                    await state.save()
+                else:
+                    logger.warning(
+                        "Onboarding interrupted before completion — "
+                        "state NOT saved (no broken record in DB)."
+                    )
+                print("\n⚠️  Session interrupted.")
+                return
 
         else:
             student_id = args.student_id
