@@ -12,6 +12,7 @@ Timeout: 30s, raises GroqTimeoutError
 from __future__ import annotations
 
 import json
+import asyncio
 import time
 from collections.abc import Generator
 from typing import Any, Callable
@@ -45,9 +46,10 @@ def get_client() -> Groq:
 
 # ── Retry helper ──────────────────────────────────────────────────────────────
 
-def _with_retry(fn: Callable, *args, **kwargs) -> Any:
+async def _with_retry(fn: Callable, *args, **kwargs) -> Any:
     """
     Call fn(*args, **kwargs) with up to 3 retries on 429.
+    Uses asyncio.sleep so the event loop is never blocked.
     Raises GroqTimeoutError on timeout, GroqRateLimitError if retries exhausted.
     """
     delays = [1, 2, 4]  # exponential backoff seconds
@@ -60,14 +62,14 @@ def _with_retry(fn: Callable, *args, **kwargs) -> Any:
             if attempt == len(delays):
                 raise GroqRateLimitError("Groq rate limit exceeded after 3 retries") from e
             logger.warning("Rate limited by Groq (attempt {}). Retrying in {}s…", attempt, delay)
-            time.sleep(delay)
+            await asyncio.sleep(delay)   # non-blocking — event loop stays free
         except Exception as e:
             raise
 
 
 # ── generate() ───────────────────────────────────────────────────────────────
 
-def generate(
+async def generate(
     messages: list[dict],
     model: str | None = None,
     system: str | None = None,
@@ -95,13 +97,13 @@ def generate(
             timeout=settings.groq_timeout_seconds,
         )
 
-    response = _with_retry(_call)
+    response = await _with_retry(_call)
     return response.choices[0].message.content
 
 
 # ── tool_call_loop() ──────────────────────────────────────────────────────────
 
-def tool_call_loop(
+async def tool_call_loop(
     system: str,
     user_message: str,
     tools: list[dict],
@@ -151,7 +153,7 @@ def tool_call_loop(
                 timeout=settings.groq_timeout_seconds,
             )
 
-        response = _with_retry(_call)
+        response = await _with_retry(_call)
         message = response.choices[0].message
 
         # ── LLM chose to call tool(s) ─────────────────────────────────────────
