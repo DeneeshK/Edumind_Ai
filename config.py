@@ -42,4 +42,15 @@ class Settings(BaseSettings):
     default_fatigue_threshold_minutes: int = 25
 
 
-settings = Settings()
+try:
+    settings = Settings()
+except Exception as _e:
+    import sys
+    print(
+        f"\n❌ EduMind config error: {_e}"
+        f"\n   Make sure your .env file exists and contains:"
+        f"\n   GROQ_API_KEY=..."
+        f"\n   TAVILY_API_KEY=..."
+        f"\n   DATABASE_URL=postgresql://user:pass@localhost:5432/edumind\n"
+    )
+    sys.exit(1)
