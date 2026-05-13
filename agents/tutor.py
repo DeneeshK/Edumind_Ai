@@ -9,13 +9,14 @@ Non-terminal tools: retrieve_content, inject_micro_lesson, handle_doubt
 
 from __future__ import annotations
 
+import sys
+
 from loguru import logger
 
 from agents.base_agent import BaseAgent
 from core.student_model import StudentState
 from core.rag_pipeline import retrieve
-from clients.groq_client import stream
-from db.postgres import get_conn
+from clients.groq_client import generate, stream
 from config import settings
 
 
@@ -26,6 +27,7 @@ class TutorAgent(BaseAgent):
     def __init__(self, state: StudentState):
         super().__init__(state)
         self._retrieved_chunks: list[str] = []
+        self._lesson_output: str = ""
 
         self.TOOLS = [
             self.build_tool(
@@ -120,17 +122,21 @@ class TutorAgent(BaseAgent):
                         "description": "Did student show signs of fatigue? Answer 'yes' or 'no'.",
                     },
                 },
-                required=["summary", "style_used", "doubt_count", "fatigue_detected"],
+                required=[
+                    "summary",
+                    "style_used",
+                    "doubt_count",
+                    "fatigue_detected"],
             ),
         ]
 
-    # ── Tool executor ─────────────────────────────────────────────────────────
+    # ── Tool executor ───────────────────────────────────────────────────────
 
-    def _execute_tool(self, tool_name: str, args: dict) -> str:
+    async def _execute_tool(self, tool_name: str, args: dict) -> str:
         if tool_name == "retrieve_content":
             concept = args["concept"]
             query = args.get("query", concept)
-            chunks = retrieve(
+            chunks = await retrieve(
                 query=query,
                 domain=self.state.domain,
                 top_k=5,
@@ -145,9 +151,9 @@ class TutorAgent(BaseAgent):
             lesson_text = args["lesson_text"]
             style_used = args.get("style_used", "formal")
 
-            print(f"\n{'='*60}")
-            print(f"📚 LESSON")
-            print(f"{'='*60}\n")
+            print(f"\n{'=' * 60}")
+            print("📚 LESSON")
+            print(f"{'=' * 60}\n")
 
             # Stream the lesson
             messages = [{
@@ -157,14 +163,20 @@ class TutorAgent(BaseAgent):
                 )
             }]
             full_text = ""
-            for chunk in stream(messages=messages, model=settings.generation_model):
+            for chunk in stream(messages=messages,
+                                model=settings.generation_model):
                 print(chunk, end="", flush=True)
                 full_text += chunk
-            print(f"\n\n{'='*60}\n")
+            self._lesson_output = full_text.strip() or lesson_text.strip()
+            print(f"\n\n{'=' * 60}\n")
 
             # Check for doubt after lesson
-            print("❓ Any questions before we continue? (press Enter to skip): ", end="")
-            doubt = input().strip()
+            doubt = ""
+            if sys.stdin.isatty():
+                print(
+                    "❓ Any questions before we continue? (press Enter to skip): ",
+                    end="")
+                doubt = input().strip()
             if doubt:
                 self.state.log_doubt(
                     self._current_module().concept if self._current_module() else "unknown",
@@ -188,9 +200,9 @@ class TutorAgent(BaseAgent):
 
         return super()._execute_tool(tool_name, args)
 
-    # ── Public run method ─────────────────────────────────────────────────────
+    # ── Public run method ───────────────────────────────────────────────────
 
-    def teach(self) -> dict:
+    async def teach(self) -> dict:
         """
         Deliver a lesson for the current curriculum module.
 
@@ -241,13 +253,55 @@ STYLE GUIDE:
 - story: narrative arc connecting concepts
 """
 
-        result = self.run(
+        result = await self.arun(
             system=system,
             user_message=f"Teach the module: '{module.title}' (concept: '{module.concept}')",
             model=settings.reasoning_model,  # 70b is more reliable with tool schemas
         )
 
-        # Update metacognition with style performance (will be scored after eval)
+        if self._lesson_output:
+            result["lesson_text"] = self._lesson_output
+        else:
+            logger.warning(
+                "TutorAgent finished without deliver_lesson output for concept='{}'",
+                module.concept,
+            )
+            fallback_prompt = (
+                "Write a complete lesson for the current module.\n"
+                "Title: " + module.title + "\n"
+                "Concept: " + module.concept + "\n"
+                "Domain framing: " + module.domain_framing + "\n"
+                "Student domain: " + self.state.domain + "\n"
+                "Preferred style: " + style + "\n\n"
+                "Include: a clear explanation, one concrete example, common confusion, "
+                "and a short takeaway. Keep it concise but useful."
+            )
+            try:
+                self._lesson_output = await generate(
+                    messages=[{"role": "user", "content": fallback_prompt}],
+                    model=settings.generation_model,
+                    system="You are a clear adaptive tutor. Return only the lesson content.",
+                )
+                print(f"\n{'=' * 60}")
+                print("📚 LESSON")
+                print(f"{'=' * 60}\n")
+                print(self._lesson_output)
+                print(f"\n{'=' * 60}\n")
+            except Exception as exc:
+                logger.error(
+                    "Fallback lesson generation failed for concept='{}': {}",
+                    module.concept,
+                    exc,
+                )
+                self._lesson_output = (
+                    "Lesson content could not be generated for "
+                    + module.concept
+                    + "."
+                )
+            result["lesson_text"] = self._lesson_output
+
+        # Update metacognition with style performance (will be scored after
+        # eval)
         self._log_decision(
             action="LESSON_DELIVERED",
             reason=f"Taught {module.concept} using {result.get('style_used', style)} style",

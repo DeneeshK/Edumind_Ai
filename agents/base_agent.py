@@ -17,6 +17,8 @@ Every subclass must define:
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 from typing import Any
 
@@ -46,7 +48,7 @@ class BaseAgent:
     def __init__(self, state: StudentState):
         self.state = state
 
-    # ── Tool spec builder ─────────────────────────────────────────────────────
+    # ── Tool spec builder ───────────────────────────────────────────────────
 
     @staticmethod
     def build_tool(
@@ -88,9 +90,9 @@ class BaseAgent:
             },
         }
 
-    # ── Tool executor (override in subclass) ──────────────────────────────────
+    # ── Tool executor (override in subclass) ────────────────────────────────
 
-    def _execute_tool(self, tool_name: str, args: dict) -> str:
+    def _execute_tool(self, tool_name: str, args: dict) -> Any:
         """
         Execute a non-terminal tool call and return a result string.
         Subclasses override this to implement tool logic.
@@ -102,20 +104,40 @@ class BaseAgent:
         Returns:
             str result fed back to the LLM as the tool response
         """
-        logger.warning("{}: unhandled tool '{}' — returning empty result", self.NAME, tool_name)
+        logger.warning(
+            "{}: unhandled tool '{}' — returning empty result",
+            self.NAME,
+            tool_name)
         return f"Tool '{tool_name}' not implemented in {self.NAME}."
 
-    def _tool_executor_wrapper(self, tool_name: str, args_str: str) -> str:
-        """Internal wrapper — parses args_str JSON before passing to _execute_tool."""
-        try:
-            args = json.loads(args_str)
-        except json.JSONDecodeError:
-            args = {"raw": args_str}
-        return self._execute_tool(tool_name, args)
+    async def _tool_executor_wrapper(
+            self, tool_name: str, args: dict | str | None) -> str:
+        """
+        Internal wrapper for tool_call_loop.
 
-    # ── Core run loop ─────────────────────────────────────────────────────────
+        groq_client.tool_call_loop already parses tool arguments into a dict.
+        Older CLI code passed a raw JSON string, so this accepts both shapes.
+        """
+        if isinstance(args, dict):
+            parsed_args = args
+        elif isinstance(args, str):
+            try:
+                parsed_args = json.loads(args)
+                if not isinstance(parsed_args, dict):
+                    parsed_args = {"raw": args}
+            except json.JSONDecodeError:
+                parsed_args = {"raw": args}
+        else:
+            parsed_args = {}
 
-    def run(
+        result = self._execute_tool(tool_name, parsed_args)
+        if inspect.isawaitable(result):
+            result = await result
+        return str(result)
+
+    # ── Core run loop ───────────────────────────────────────────────────────
+
+    async def arun(
         self,
         system: str,
         user_message: str,
@@ -134,9 +156,12 @@ class BaseAgent:
         Returns:
             dict of terminal tool arguments
         """
-        logger.info("▶ {} starting (student={})", self.NAME, self.state.student_id)
+        logger.info(
+            "▶ {} starting (student={})",
+            self.NAME,
+            self.state.student_id)
 
-        result = tool_call_loop(
+        result = await tool_call_loop(
             system=system,
             user_message=user_message,
             tools=self.TOOLS,
@@ -149,13 +174,37 @@ class BaseAgent:
         logger.info("◀ {} finished → keys={}", self.NAME, list(result.keys()))
         return result
 
-    # ── Shared helpers ────────────────────────────────────────────────────────
+    def run(
+        self,
+        system: str,
+        user_message: str,
+        context: str = "",
+        model: str | None = None,
+    ) -> dict:
+        """
+        Synchronous compatibility wrapper for CLI/tests.
+
+        Async application paths should call arun() so the event loop is not
+        blocked or nested.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.arun(system, user_message, context, model))
+
+        raise RuntimeError(
+            f"{self.NAME}.run() was called inside an active event loop. "
+            "Use `await agent.arun(...)` instead."
+        )
+
+    # ── Shared helpers ──────────────────────────────────────────────────────
 
     def _student_context(self) -> str:
         """Return student context string for injection into system prompts."""
         return self.state.as_prompt_context()
 
-    def _log_decision(self, action: str, reason: str, payload: dict | None = None) -> None:
+    def _log_decision(self, action: str, reason: str,
+                      payload: dict | None = None) -> None:
         """Record a decision to state.session_decisions (flushed to DB at session end)."""
         from core.student_model import AdaptationDecision
         decision = AdaptationDecision(

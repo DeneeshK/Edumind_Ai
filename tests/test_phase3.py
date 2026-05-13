@@ -6,15 +6,16 @@ Run: pytest tests/test_phase3.py -v -s
 NOTE: BGE-M3 downloads ~2GB on first run. This is a one-time download.
 """
 
-import sys, os
+from core.rag_pipeline import hyde, retrieve
+from db.chromadb_client import insert, search, rerank, embed
+import pytest
+from dotenv import load_dotenv
+import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from dotenv import load_dotenv
 load_dotenv()
 
-import pytest
-from db.chromadb_client import insert, search, rerank, embed
-from core.rag_pipeline import hyde, retrieve
 
 TEST_DOMAIN = "test_ml_domain"
 
@@ -56,7 +57,7 @@ def test_insert_and_search():
     results = search("how does attention mechanism work", TEST_DOMAIN, top_k=3)
     print(f"✅ Retrieved {len(results)} chunks")
     for i, r in enumerate(results):
-        print(f"   [{i+1}] {r[:80]}...")
+        print(f"   [{i + 1}] {r[:80]}...")
 
     assert len(results) > 0
     # At least one result should mention attention
@@ -71,9 +72,9 @@ def test_rerank_orders_by_relevance():
     query = "explain self-attention in transformers"
     reranked = rerank(query, all_texts, top_k=3)
 
-    print(f"\n✅ Reranked top 3:")
+    print("\n✅ Reranked top 3:")
     for i, r in enumerate(reranked):
-        print(f"   [{i+1}] {r[:80]}...")
+        print(f"   [{i + 1}] {r[:80]}...")
 
     combined = " ".join(reranked).lower()
     assert "attention" in combined
@@ -81,24 +82,26 @@ def test_rerank_orders_by_relevance():
     assert "photosynthesis" not in reranked[0].lower()
 
 
-def test_hyde_generates_hypothetical():
+@pytest.mark.asyncio
+async def test_hyde_generates_hypothetical():
     """HyDE should return a non-empty string."""
-    hypo = hyde("what is the query-key-value mechanism in transformers")
+    hypo = await hyde("what is the query-key-value mechanism in transformers")
     print(f"\n✅ HyDE output ({len(hypo)} chars): '{hypo[:100]}...'")
     assert isinstance(hypo, str)
     assert len(hypo) > 50
 
 
-def test_full_rag_pipeline():
+@pytest.mark.asyncio
+async def test_full_rag_pipeline():
     """Full retrieve() pipeline should return up to 5 relevant chunks."""
-    results = retrieve(
+    results = await retrieve(
         query="how does self-attention work in transformers",
         domain=TEST_DOMAIN,
         top_k=5,
     )
     print(f"\n✅ RAG pipeline returned {len(results)} chunks")
     for i, r in enumerate(results):
-        print(f"   [{i+1}] {r[:80]}...")
+        print(f"   [{i + 1}] {r[:80]}...")
 
     assert len(results) > 0
     combined = " ".join(results).lower()

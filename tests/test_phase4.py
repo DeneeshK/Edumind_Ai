@@ -9,19 +9,18 @@ Phase 4 — BaseAgent verification:
 Run: pytest tests/test_phase4.py -v -s
 """
 
-import json
-import sys, os
+from core.student_model import StudentState
+from agents.base_agent import BaseAgent
+import pytest
+from dotenv import load_dotenv
+import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from dotenv import load_dotenv
 load_dotenv()
 
-import pytest
-from agents.base_agent import BaseAgent
-from core.student_model import StudentState
 
-
-# ── Toy subclass ──────────────────────────────────────────────────────────────
+# ── Toy subclass ────────────────────────────────────────────────────────
 
 class GreeterAgent(BaseAgent):
     NAME = "greeter_agent"
@@ -43,7 +42,7 @@ class GreeterAgent(BaseAgent):
                 description="Conclude the greeting session. Call this after greeting.",
                 properties={
                     "greeting": {"type": "string", "description": "The final greeting message"},
-                    "ready":    {"type": "boolean", "description": "Is the student ready?"},
+                    "ready": {"type": "boolean", "description": "Is the student ready?"},
                 },
                 required=["greeting", "ready"],
             ),
@@ -65,7 +64,7 @@ class GreeterAgent(BaseAgent):
         )
 
 
-# ── Fixtures ──────────────────────────────────────────────────────────────────
+# ── Fixtures ────────────────────────────────────────────────────────────
 
 @pytest.fixture
 def student():
@@ -78,7 +77,7 @@ def student():
     )
 
 
-# ── Tests ─────────────────────────────────────────────────────────────────────
+# ── Tests ───────────────────────────────────────────────────────────────
 
 def test_build_tool_structure():
     """build_tool() must produce a valid Groq tool spec."""

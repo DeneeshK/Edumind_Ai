@@ -27,7 +27,9 @@ from config import settings
 
 # Shared executor for CPU-bound embedding — offloads sentence-transformer
 # inference off the async event loop.
-_EMBED_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="chroma_embed")
+_EMBED_EXECUTOR = ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="chroma_embed")
+MIN_CURRICULUM_MODULES = 5
 
 
 class CurriculumArchitectAgent(BaseAgent):
@@ -61,7 +63,7 @@ class CurriculumArchitectAgent(BaseAgent):
                 description=(
                     "Add one module to the curriculum plan. "
                     "Call this once per concept in learning order. "
-                    "Build 4-8 modules total depending on topic complexity."
+                    "Build 5-8 modules total depending on topic complexity."
                 ),
                 properties={
                     "id": {
@@ -111,7 +113,7 @@ class CurriculumArchitectAgent(BaseAgent):
                 name="submit_curriculum",
                 description=(
                     "Submit the completed curriculum plan. "
-                    "Call this after adding all modules (minimum 4)."
+                    "Call this after adding all modules (minimum 5)."
                 ),
                 properties={
                     "topic": {
@@ -127,7 +129,7 @@ class CurriculumArchitectAgent(BaseAgent):
             ),
         ]
 
-    # -- Tool executor ---------------------------------------------------------
+    # -- Tool executor -------------------------------------------------------
 
     def _execute_tool(self, tool_name: str, args: dict) -> str:
         if tool_name == "search_domain":
@@ -161,7 +163,7 @@ class CurriculumArchitectAgent(BaseAgent):
 
         return super()._execute_tool(tool_name, args)
 
-    # -- Public build method ---------------------------------------------------
+    # -- Public build method -------------------------------------------------
 
     async def build_curriculum(self, topic: str) -> CurriculumPlan:
         """
@@ -184,16 +186,18 @@ class CurriculumArchitectAgent(BaseAgent):
             "CURRICULUM RULES:\n"
             "- Use search_domain 2-3 times to understand prerequisites and concept ordering\n"
             "- Add modules in strict learning order (prerequisites before dependents)\n"
-            "- Build 4-8 modules total\n"
-            "- All modules should use depth_level='" + depth_level + "' matching the student's pace\n"
-            "- Domain: " + self.state.domain + " -- frame every concept in this domain context\n"
+            "- Build 5-8 modules total; never submit fewer than 5 modules\n"
+            "- All modules should use depth_level='" +
+            depth_level + "' matching the student's pace\n"
+            "- Domain: " + self.state.domain +
+            " -- frame every concept in this domain context\n"
             "- Goal: " + self.state.goal + "\n"
             "- Concepts already mastered (skip these): " + known_str + "\n"
             "- estimated_minutes per module: 8-15 for fast, 10-20 for medium, 15-30 for deep\n"
             "- After adding all modules, call submit_curriculum\n"
         )
 
-        result = self.run(
+        result = await self.arun(
             system=system,
             user_message=(
                 "Build a curriculum for topic: '" + topic
@@ -215,20 +219,15 @@ class CurriculumArchitectAgent(BaseAgent):
                 depth_level=m.get("depth_level", depth_level),
             ))
 
-        if not modules:
-            logger.warning("No modules buffered — creating fallback single-module plan")
-            modules = [Module(
-                id="m1", title=topic, concept=topic,
-                domain_framing=topic + " in " + self.state.domain,
-                prerequisites=[], estimated_minutes=15,
-                depth_level=depth_level,
-            )]
+        modules = self._ensure_minimum_modules(topic, modules, depth_level)
 
         # Validate minimum module count
-        if len(modules) < 4:
+        if len(modules) < MIN_CURRICULUM_MODULES:
             logger.warning(
-                "Only {} modules buffered (minimum is 4). "
-                "Curriculum may be incomplete.", len(modules)
+                "Only {} modules buffered (minimum is {}). "
+                "Curriculum may be incomplete.",
+                len(modules),
+                MIN_CURRICULUM_MODULES,
             )
 
         plan = CurriculumPlan(
@@ -270,7 +269,8 @@ class CurriculumArchitectAgent(BaseAgent):
         )
 
         logger.info(
-            "Curriculum built: {} modules for topic='{}'", len(modules), plan.topic
+            "Curriculum built: {} modules for topic='{}'", len(
+                modules), plan.topic
         )
 
         # Populate ChromaDB — error-safe, never blocks curriculum delivery
@@ -278,7 +278,67 @@ class CurriculumArchitectAgent(BaseAgent):
 
         return plan
 
-    # -- ChromaDB population ---------------------------------------------------
+    def _ensure_minimum_modules(
+        self,
+        topic: str,
+        modules: list[Module],
+        depth_level: str,
+    ) -> list[Module]:
+        """
+        Keep the learner-facing contract stable even if the model submits early.
+
+        The normal path is still the agentic add_module flow. This fallback only
+        repairs short plans so the app never collapses to a single module.
+        """
+        if len(modules) >= MIN_CURRICULUM_MODULES:
+            return modules
+
+        logger.warning(
+            "Curriculum has {} module(s); expanding fallback to {} modules.",
+            len(modules), MIN_CURRICULUM_MODULES,
+        )
+
+        used_ids = {m.id for m in modules}
+        used_concepts = {m.concept.strip().lower()
+                         for m in modules if m.concept}
+
+        fallback_specs = [
+            ("Foundations of " + topic, "foundations of " + topic),
+            ("Core Principles of " + topic, "core principles of " + topic),
+            ("Worked Examples for " + topic, "worked examples for " + topic),
+            ("Common Misconceptions in " + topic,
+             "common misconceptions in " + topic),
+            ("Practice and Synthesis for " + topic,
+             "practice and synthesis for " + topic),
+        ]
+
+        next_num = len(modules) + 1
+        while len(modules) < MIN_CURRICULUM_MODULES:
+            while "m" + str(next_num) in used_ids:
+                next_num += 1
+
+            spec_index = min(len(modules), len(fallback_specs) - 1)
+            title, concept = fallback_specs[spec_index]
+            if concept in used_concepts:
+                concept = topic + " extension " + str(next_num)
+                title = "Extension " + str(next_num) + ": " + topic
+
+            modules.append(Module(
+                id="m" + str(next_num),
+                title=title,
+                concept=concept,
+                domain_framing=concept + " in " + self.state.domain,
+                prerequisites=[] if not modules else [modules[-1].concept],
+                estimated_minutes=15,
+                depth_level=depth_level,
+            ))
+            used_ids.add("m" + str(next_num))
+            used_concepts.add(concept)
+            next_num += 1
+
+        return modules
+
+    # -- ChromaDB population -------------------------------------------------
 
     async def _embed_modules_to_chromadb(self, plan: CurriculumPlan) -> None:
         """
@@ -298,7 +358,7 @@ class CurriculumArchitectAgent(BaseAgent):
         CPU-bound encoding is offloaded to _EMBED_EXECUTOR so the async
         event loop is never blocked during embedding.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         domain = plan.domain
         embedded_count = 0
         failed_count = 0
@@ -311,7 +371,8 @@ class CurriculumArchitectAgent(BaseAgent):
         for module in plan.modules:
             concept = module.concept
             framing = module.domain_framing
-            prereqs = ", ".join(module.prerequisites) if module.prerequisites else "none"
+            prereqs = ", ".join(
+                module.prerequisites) if module.prerequisites else "none"
             safe_concept = re.sub(r"[^a-zA-Z0-9_]", "_", concept)[:60]
 
             # Layer 1: Structured concept card
@@ -344,7 +405,7 @@ class CurriculumArchitectAgent(BaseAgent):
                     "Cover: definition, key properties, one concrete example. "
                     "Be factual. No preamble."
                 )
-                retrieval_summary = generate(
+                retrieval_summary = await generate(
                     messages=[{"role": "user", "content": summary_prompt}],
                     model=settings.generation_model,
                 )
@@ -359,12 +420,20 @@ class CurriculumArchitectAgent(BaseAgent):
             if retrieval_summary:
                 parts.append("Summary:\n" + retrieval_summary)
             if matching_tavily:
-                parts.append("Related content:\n" + "\n---\n".join(matching_tavily))
+                parts.append(
+                    "Related content:\n" +
+                    "\n---\n".join(matching_tavily))
 
             full_text = "\n\n".join(parts)
 
             # Insert into ChromaDB via thread pool (CPU-bound)
-            chunk_id = (plan.topic + "_" + safe_concept).replace(" ", "_")[:180]
+            chunk_id = (
+                plan.topic +
+                "_" +
+                safe_concept).replace(
+                " ",
+                "_")[
+                :180]
             try:
                 await loop.run_in_executor(
                     _EMBED_EXECUTOR,

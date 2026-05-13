@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     )
 
     # Groq Model Names
-    reasoning_model: str = "llama-3.3-70b-versatile"
+    reasoning_model: str = "llama-3.1-8b-instant"
     generation_model: str = "llama-3.1-8b-instant"
 
     # Agent Behaviour

@@ -1,18 +1,18 @@
-import asyncio
-import uuid
-import pytest
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from dotenv import load_dotenv
-load_dotenv()
-
-import db.postgres as pg
-from db.postgres import upsert_student
 from core.student_model import (
     StudentState, MetacognitionProfile, CurriculumPlan,
     Module, EvaluationReport, AdaptationDecision,
 )
+from db.postgres import upsert_student
+import db.postgres as pg
+from dotenv import load_dotenv
+import uuid
+import pytest
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+load_dotenv()
+
 
 @pytest.mark.asyncio
 async def test_pydantic_models_instantiate():
@@ -20,7 +20,11 @@ async def test_pydantic_models_instantiate():
     Module(id="m1", title="Dot Product", concept="dot_product",
            domain_framing="vectors for ML", prerequisites=[],
            estimated_minutes=10, depth_level="standard")
-    CurriculumPlan(topic="Linear Algebra", domain="ML", goal="exam", modules=[])
+    CurriculumPlan(
+        topic="Linear Algebra",
+        domain="ML",
+        goal="exam",
+        modules=[])
     EvaluationReport(
         concept="dot_product", session_id="s1",
         correctness_score=0.8, depth_score=0.7, mastery_score=0.76,
@@ -29,6 +33,7 @@ async def test_pydantic_models_instantiate():
     )
     AdaptationDecision(action="MOVE_FORWARD", reason="threshold cleared")
     print("\n✅ All Pydantic models instantiate cleanly.")
+
 
 @pytest.mark.asyncio
 async def test_student_state_round_trip():
@@ -61,7 +66,9 @@ async def test_student_state_round_trip():
         await state.save()
         reloaded = await StudentState.load(sid)
 
-        assert abs(reloaded.concept_mastery["dot_product"] - expected_mastery) < 0.01
+        assert abs(
+            reloaded.concept_mastery["dot_product"] -
+            expected_mastery) < 0.01
         assert reloaded.metacognition.preferred_style == "analogy"
         assert reloaded.metacognition.calibration_pattern == "overconfident"
 

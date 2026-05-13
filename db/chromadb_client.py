@@ -25,14 +25,17 @@ from config import settings
 _embedder = None
 _reranker = None
 
+
 def _get_embedder():
     global _embedder
     if _embedder is None:
         from sentence_transformers import SentenceTransformer
         logger.info("Loading all-mpnet-base-v2 embedder (CPU)…")
-        _embedder = SentenceTransformer("sentence-transformers/all-mpnet-base-v2", device="cpu")
+        _embedder = SentenceTransformer(
+            "sentence-transformers/all-mpnet-base-v2", device="cpu")
         logger.info("all-mpnet-base-v2 loaded.")
     return _embedder
+
 
 def _get_reranker():
     global _reranker
@@ -43,8 +46,10 @@ def _get_reranker():
         logger.info("BGE Reranker Large loaded.")
     return _reranker
 
+
 _chroma_client = None
 _collections: dict = {}
+
 
 def _get_chroma():
     global _chroma_client
@@ -53,8 +58,11 @@ def _get_chroma():
             path=settings.chromadb_path,
             settings=ChromaSettings(anonymized_telemetry=False),
         )
-        logger.info("ChromaDB client initialised at '{}'", settings.chromadb_path)
+        logger.info(
+            "ChromaDB client initialised at '{}'",
+            settings.chromadb_path)
     return _chroma_client
+
 
 def _get_collection(domain: str):
     safe_name = domain.replace(" ", "_").replace("/", "_").lower()[:60]
@@ -68,10 +76,12 @@ def _get_collection(domain: str):
         )
     return _collections[collection_name]
 
+
 def embed(text: str) -> list[float]:
     embedder = _get_embedder()
     vec = embedder.encode(text, normalize_embeddings=True)
     return vec.tolist()
+
 
 def insert(chunk_id: str, domain: str, text: str) -> None:
     vector = embed(text)
@@ -83,6 +93,7 @@ def insert(chunk_id: str, domain: str, text: str) -> None:
         metadatas=[{"domain": domain, "chunk_id": chunk_id}],
     )
     logger.debug("Inserted chunk '{}' into domain '{}'", chunk_id, domain)
+
 
 def search(query: str, domain: str, top_k: int = 10) -> list[str]:
     collection = _get_collection(domain)
@@ -98,8 +109,10 @@ def search(query: str, domain: str, top_k: int = 10) -> list[str]:
         include=["documents"],
     )
     docs = results.get("documents", [[]])[0]
-    logger.info("ChromaDB search: {} results for '{}' in '{}'", len(docs), query[:60], domain)
+    logger.info("ChromaDB search: {} results for '{}' in '{}'",
+                len(docs), query[:60], domain)
     return docs
+
 
 def rerank(query: str, chunks: list[str], top_k: int = 5) -> list[str]:
     if not chunks:

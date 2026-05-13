@@ -9,6 +9,8 @@ Non-terminal tools: ask_question, request_clarification
 
 from __future__ import annotations
 
+import sys
+
 from loguru import logger
 
 from agents.base_agent import BaseAgent
@@ -116,17 +118,19 @@ class EvaluatorAgent(BaseAgent):
             ),
         ]
 
-        # Conversation log — questions and student answers collected during eval
+        # Conversation log — questions and student answers collected during
+        # eval
         self._qa_log: list[dict] = []
 
-    # ── Tool executor ─────────────────────────────────────────────────────────
+    # ── Tool executor ───────────────────────────────────────────────────────
 
     def _execute_tool(self, tool_name: str, args: dict) -> str:
         if tool_name == "ask_question":
             question = args["question"]
             q_type = args.get("question_type", "recall")
             print(f"\n🔍 [{q_type.upper()}] {question}")
-            answer = input("Your answer: ").strip()
+            answer = input("Your answer: ").strip(
+            ) if sys.stdin.isatty() else ""
             self._qa_log.append({
                 "question": question,
                 "type": q_type,
@@ -137,7 +141,8 @@ class EvaluatorAgent(BaseAgent):
         if tool_name == "request_clarification":
             prompt = args["prompt"]
             print(f"\n💬 {prompt}")
-            answer = input("Clarification: ").strip()
+            answer = input("Clarification: ").strip(
+            ) if sys.stdin.isatty() else ""
             self._qa_log.append({
                 "question": prompt,
                 "type": "clarification",
@@ -147,9 +152,10 @@ class EvaluatorAgent(BaseAgent):
 
         return super()._execute_tool(tool_name, args)
 
-    # ── Public run method ─────────────────────────────────────────────────────
+    # ── Public run method ───────────────────────────────────────────────────
 
-    async def evaluate(self, concept: str, confidence_stated: int) -> EvaluationReport:
+    async def evaluate(self, concept: str,
+                       confidence_stated: int) -> EvaluationReport:
         """
         Run a full evaluation for the given concept.
 
@@ -167,7 +173,12 @@ class EvaluatorAgent(BaseAgent):
         reteach_count = meta.consecutive_reteach_count
 
         # Pace-bound question count — strictly enforced in prompt
-        pace_questions = {"fast": 2, "medium": 3, "deep": 5}.get(self.state.pace, 3)
+        pace_questions = {
+            "fast": 2,
+            "medium": 3,
+            "deep": 5}.get(
+            self.state.pace,
+            3)
         pace_style = {
             "fast": "direct application questions only — no deep probing",
             "medium": "mix of application and conceptual connection questions",
@@ -206,13 +217,13 @@ RECOMMENDED ACTION GUIDE:
 - student clearly ahead: COMPRESS
 """
 
-        result = self.run(
+        result = await self.arun(
             system=system,
             user_message=f"Evaluate the student on concept: '{concept}'",
             model=settings.reasoning_model,
         )
 
-        # ── Build EvaluationReport ────────────────────────────────────────────
+        # ── Build EvaluationReport ───────────────────────────────────────────
         correctness = float(result.get("correctness_score", 0.0))
         depth = float(result.get("depth_score", 0.0))
         mastery = round(0.6 * correctness + 0.4 * depth, 3)
@@ -232,11 +243,14 @@ RECOMMENDED ACTION GUIDE:
             misconception_detail=result.get("misconception_detail", ""),
             confidence_stated=confidence_stated,
             calibration_delta=calibration_delta,
-            questions_asked=int(result.get("questions_asked", len(self._qa_log))),
+            questions_asked=int(
+                result.get(
+                    "questions_asked", len(
+                        self._qa_log))),
             recommended_action=result.get("recommended_action", "RETEACH"),
         )
 
-        # ── Update StudentState ───────────────────────────────────────────────
+        # ── Update StudentState ──────────────────────────────────────────────
         self.state.update_mastery(concept, correctness, depth)
         self.state.metacognition.update_calibration(calibration_delta)
         self.state.evaluation_cycle_count += 1
@@ -244,7 +258,7 @@ RECOMMENDED ACTION GUIDE:
         # read it without a DB round-trip during the same session.
         self.state.evaluation_history.append(report)
 
-        # ── Write to DB immediately (mid-session) ─────────────────────────────
+        # ── Write to DB immediately (mid-session) ────────────────────────────
         await write_evaluation({
             "student_id": self.state.student_id,
             "session_id": self.state.session_id,

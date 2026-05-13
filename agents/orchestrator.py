@@ -12,8 +12,7 @@ It delegates to: CurriculumArchitectAgent, TutorAgent, EvaluatorAgent, Adaptatio
 
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime
+import sys
 
 from loguru import logger
 
@@ -23,10 +22,7 @@ from agents.tutor import TutorAgent
 from agents.evaluator import EvaluatorAgent
 from agents.adaptation_engine import AdaptationEngine
 from core.student_model import StudentState
-from db.postgres import (
-    init_db, upsert_student, write_session_memory, bulk_write_decisions
-)
-from clients.tavily_client import clear_cache
+from db.postgres import upsert_student
 from config import settings
 
 
@@ -72,7 +68,10 @@ class OrchestratorAgent(BaseAgent):
                         "description": "One sentence hint for what to focus on next session",
                     },
                 },
-                required=["session_summary", "modules_completed", "next_session_hint"],
+                required=[
+                    "session_summary",
+                    "modules_completed",
+                    "next_session_hint"],
             ),
             self.build_tool(
                 name="route_after_evaluation",
@@ -109,8 +108,7 @@ class OrchestratorAgent(BaseAgent):
                     },
                     "style_for_reteach": {
                         "type": "string",
-                        "enum": ["formal", "socratic", "example_first", "visual", "story"],
-                        "description": "Only required when action=RETEACH. Which style to switch to.",
+                        "description": "Only required when action=RETEACH. Which style to switch to. Must be one of: formal, socratic, example_first, visual, story. Leave empty otherwise.",
                     },
                     "missing_concept": {
                         "type": "string",
@@ -121,28 +119,36 @@ class OrchestratorAgent(BaseAgent):
             ),
         ]
 
-    # ── Tool executor ─────────────────────────────────────────────────────────
+    # ── Tool executor ───────────────────────────────────────────────────────
 
     def _execute_tool(self, tool_name: str, args: dict) -> str:
         if tool_name == "plan_session":
             modules_to_cover = args.get("modules_to_cover", [])
             session_goal = args.get("session_goal", "")
-            logger.info("Session plan: {} modules, goal='{}'", len(modules_to_cover), session_goal)
-            return "Session planned: covering " + str(modules_to_cover) + ". Goal: " + session_goal
+            logger.info(
+                "Session plan: {} modules, goal='{}'",
+                len(modules_to_cover),
+                session_goal)
+            return "Session planned: covering " + \
+                str(modules_to_cover) + ". Goal: " + session_goal
 
         if tool_name == "route_after_evaluation":
             # Store routing decision so _run_module_loop can read it
             self._last_route = args
             action = args.get("action", "")
             reason = args.get("reason", "")
-            logger.info("LLM routing decision: action={} reason='{}'", action, reason)
+            logger.info(
+                "LLM routing decision: action={} reason='{}'",
+                action,
+                reason)
             return "Routing decision recorded: " + action
 
         return super()._execute_tool(tool_name, args)
 
-    # ── LLM routing ───────────────────────────────────────────────────────────
+    # ── LLM routing ─────────────────────────────────────────────────────────
 
-    def _llm_route(self, module_concept: str, report_summary: str) -> dict:
+    async def _llm_route(self, module_concept: str,
+                         report_summary: str) -> dict:
         """
         Ask the Orchestrator LLM to reason over the evaluation result
         and current student state, then call route_after_evaluation.
@@ -167,12 +173,15 @@ class OrchestratorAgent(BaseAgent):
             "with the correct action based on the evidence below. "
             "Do not explain. Do not ask questions. Call the tool immediately.\n\n"
             "ROUTING RULES:\n"
-            "- mastery >= " + str(mastery_threshold) + " AND no critical misconception -> MOVE_FORWARD\n"
-            "- mastery < " + str(mastery_threshold) + " AND consecutive_reteach < 3 -> RETEACH\n"
+            "- mastery >= " + str(mastery_threshold) +
+            " AND no critical misconception -> MOVE_FORWARD\n"
+            "- mastery < " + str(mastery_threshold) +
+            " AND consecutive_reteach < 3 -> RETEACH\n"
             "- misconception_type = prerequisite_gap -> DETOUR (name the missing concept)\n"
             "- consecutive_reteach >= 3 -> ESCALATE\n"
             "- mastery >= 0.90 and student answered quickly -> COMPRESS\n"
-            "- student explicitly asked to stop -> HOLD\n\n"
+            "- student literally typed 'stop', 'quit', or 'exit' -> HOLD\n"
+            "CRITICAL: Never output HOLD unless the student's text literally says 'stop', 'quit', 'pause' or 'exit'.\n\n"
             "STUDENT STATE:\n"
             + self._student_context() + "\n"
             "consecutive_reteach_count: " + str(consecutive) + "\n"
@@ -186,7 +195,7 @@ class OrchestratorAgent(BaseAgent):
             + "\n\nCall route_after_evaluation now."
         )
 
-        self.run(
+        await self.arun(
             system=system,
             user_message=user_msg,
             model=settings.reasoning_model,
@@ -194,7 +203,8 @@ class OrchestratorAgent(BaseAgent):
 
         if not self._last_route:
             # LLM failed to call the tool — apply safe fallback
-            logger.warning("LLM did not call route_after_evaluation — defaulting to RETEACH")
+            logger.warning(
+                "LLM did not call route_after_evaluation — defaulting to RETEACH")
             self._last_route = {
                 "action": "RETEACH",
                 "reason": "Routing fallback: LLM did not return a tool call.",
@@ -202,17 +212,43 @@ class OrchestratorAgent(BaseAgent):
 
         return self._last_route
 
-    # ── Layer 1: Onboarding ───────────────────────────────────────────────────
+    # ── Layer 1: Onboarding ─────────────────────────────────────────────────
 
     async def _onboard(self) -> str:
         """Collect student name, domain, goal, pace via CLI. Returns topic."""
-        print("\n" + "="*60)
+        if not sys.stdin.isatty():
+            name = self.state.name or "Student"
+            domain = self.state.domain or "general"
+            goal = self.state.goal or "learn the requested topic"
+            topic = self.state.goal or self.state.domain or "requested topic"
+            pace = self.state.pace if self.state.pace in (
+                "fast", "medium", "deep") else "medium"
+
+            self.state.name = name
+            self.state.domain = domain
+            self.state.goal = goal
+            self.state.pace = pace
+
+            await upsert_student(
+                self.state.student_id,
+                name, domain, goal, pace,
+            )
+            logger.info(
+                "Non-interactive onboarding used state defaults: domain='{}' topic='{}'",
+                domain,
+                topic,
+            )
+            return topic
+
+        print("\n" + "=" * 60)
         print("🎓 Welcome to EduMind — Adaptive Learning System")
-        print("="*60 + "\n")
+        print("=" * 60 + "\n")
 
         name = input("Your name: ").strip() or "Student"
-        domain = input("Your domain/field (e.g. 'machine learning', 'physics'): ").strip()
-        goal = input("Your learning goal (e.g. 'understand transformers for NLP'): ").strip()
+        domain = input(
+            "Your domain/field (e.g. 'machine learning', 'physics'): ").strip()
+        goal = input(
+            "Your learning goal (e.g. 'understand transformers for NLP'): ").strip()
         topic = input("Topic to learn today: ").strip()
 
         print("\nLearning pace:")
@@ -235,7 +271,7 @@ class OrchestratorAgent(BaseAgent):
         print(f"\n✅ Welcome {name}! Let's learn '{topic}'.\n")
         return topic
 
-    # ── Layer 2: Module loop ──────────────────────────────────────────────────
+    # ── Layer 2: Module loop ────────────────────────────────────────────────
 
     async def _run_module_loop(self) -> list[str]:
         """
@@ -252,7 +288,7 @@ class OrchestratorAgent(BaseAgent):
             logger.error("No curriculum set — cannot run module loop")
             return completed
 
-        max_modules_per_session = 3
+        max_modules_per_session = 5
         modules_done = 0
 
         while (
@@ -260,23 +296,34 @@ class OrchestratorAgent(BaseAgent):
             and modules_done < max_modules_per_session
         ):
             module = curriculum.modules[curriculum.current_index]
-            print(f"\n{'─'*60}")
-            print(f" Module {curriculum.current_index + 1}/{len(curriculum.modules)}: {module.title}")
-            print(f"{'─'*60}")
+            print(f"\n{'─' * 60}")
+            print(
+                f" Module {curriculum.current_index + 1}/{len(curriculum.modules)}: {module.title}")
+            print(f"{'─' * 60}")
 
-            # ── Teach ─────────────────────────────────────────────────────────
+            # ── Teach ────────────────────────────────────────────────────────
             try:
                 tutor = TutorAgent(self.state)
-                lesson_result = tutor.teach()
+                lesson_result = await tutor.teach()
             except Exception as exc:
-                logger.error("TutorAgent.teach() failed for '{}': {}", module.concept, exc)
-                print(f"\n⚠️  Lesson delivery failed ({exc}). Skipping to evaluation with partial context.")
-                lesson_result = {"style_used": "formal", "fatigue_detected": "no", "doubt_count": 0}
+                logger.error(
+                    "TutorAgent.teach() failed for '{}': {}",
+                    module.concept,
+                    exc)
+                print(
+                    f"\n⚠️  Lesson delivery failed ({exc}). Skipping to evaluation with partial context.")
+                lesson_result = {
+                    "style_used": "formal",
+                    "fatigue_detected": "no",
+                    "doubt_count": 0,
+                    "lesson_text": "",
+                }
 
-            # ── Doubt count trigger (micro-example injection) ─────────────────
+            # ── Doubt count trigger (micro-example injection) ────────────────
             doubt_count = self.state.get_doubt_count(module.concept)
             if doubt_count >= 2:
-                print(f"\n💡 You raised {doubt_count} doubts on '{module.concept}'. Injecting a worked example…\n")
+                print(
+                    f"\n💡 You raised {doubt_count} doubts on '{module.concept}'. Injecting a worked example…\n")
                 try:
                     self._inject_micro_example(module.concept)
                 except Exception as exc:
@@ -284,22 +331,29 @@ class OrchestratorAgent(BaseAgent):
 
             style_used = lesson_result.get("style_used", "formal")
 
-            # ── Confidence rating ─────────────────────────────────────────────
-            print(f"\n📊 How confident are you about '{module.concept}'? (1–5): ", end="")
+            # ── Confidence rating ────────────────────────────────────────────
+            print(
+                f"\n📊 How confident are you about '{module.concept}'? (1–5): ",
+                end="")
             try:
-                confidence = int(input().strip())
+                confidence = int(input().strip()) if sys.stdin.isatty() else 3
                 confidence = max(1, min(5, confidence))
             except (ValueError, EOFError):
                 confidence = 3
 
-            # ── Evaluate ──────────────────────────────────────────────────────
+            # ── Evaluate ─────────────────────────────────────────────────────
             try:
                 evaluator = EvaluatorAgent(self.state)
                 report = await evaluator.evaluate(module.concept, confidence)
             except Exception as exc:
-                logger.error("EvaluatorAgent.evaluate() failed for '{}': {}", module.concept, exc)
-                print(f"\n⚠️  Evaluation failed ({exc}). Recording zero mastery and reteaching.")
-                # Safe fallback: build a zero-score report so adaptation can still run
+                logger.error(
+                    "EvaluatorAgent.evaluate() failed for '{}': {}",
+                    module.concept,
+                    exc)
+                print(
+                    f"\n⚠️  Evaluation failed ({exc}). Recording zero mastery and reteaching.")
+                # Safe fallback: build a zero-score report so adaptation can
+                # still run
                 from core.student_model import EvaluationReport
                 report = EvaluationReport(
                     concept=module.concept,
@@ -316,15 +370,16 @@ class OrchestratorAgent(BaseAgent):
                 )
 
             # Update metacognition style score with post-eval depth
-            self.state.metacognition.record_style_depth(style_used, report.depth_score)
+            self.state.metacognition.record_style_depth(
+                style_used, report.depth_score)
 
-            # ── AdaptationEngine: deep metacognitive decision ──────────────────
+            # ── AdaptationEngine: deep metacognitive decision ────────────────
             # AdaptationEngine runs its own agentic tool loop to decide the
             # recommended action. Its output feeds the Orchestrator LLM as
             # evidence — the Orchestrator makes the FINAL routing call.
             try:
                 engine = AdaptationEngine(self.state)
-                engine_decision = engine.decide(report)
+                engine_decision = await engine.decide(report)
                 engine_summary = (
                     "AdaptationEngine recommended: " + engine_decision.action
                     + " | reason: " + engine_decision.reason
@@ -333,17 +388,19 @@ class OrchestratorAgent(BaseAgent):
                 logger.error("AdaptationEngine.decide() failed: {}", exc)
                 engine_summary = "AdaptationEngine failed — use evaluation scores only."
 
-            # ── Gap analysis (every 3 evaluation cycles) ───────────────────────
+            # ── Gap analysis (every 3 evaluation cycles) ─────────────────────
             try:
-                gap_concept = engine.run_gap_analysis()
+                gap_concept = await engine.run_gap_analysis()
                 if gap_concept:
-                    print(f"\n🔍 Gap analysis: missing prerequisite '{gap_concept}'")
+                    print(
+                        f"\n🔍 Gap analysis: missing prerequisite '{gap_concept}'")
                     engine_summary += " | Gap detected: " + gap_concept
             except Exception as exc:
-                logger.warning("run_gap_analysis() failed (non-critical): {}", exc)
+                logger.warning(
+                    "run_gap_analysis() failed (non-critical): {}", exc)
                 gap_concept = None
 
-            # ── Orchestrator LLM routing (TRULY AGENTIC) ──────────────────────
+            # ── Orchestrator LLM routing (TRULY AGENTIC) ─────────────────────
             # The LLM reasons over: evaluation report + engine recommendation
             # + student metacognition + mastery threshold for pace.
             # It calls route_after_evaluation to emit its decision.
@@ -351,21 +408,35 @@ class OrchestratorAgent(BaseAgent):
             # LLM reasoning, not hardcoded Python if/else.
             report_summary = (
                 "mastery_score: " + str(round(report.mastery_score, 2)) + "\n"
-                "correctness: " + str(round(report.correctness_score, 2)) + "\n"
+                "correctness: " +
+                str(round(report.correctness_score, 2)) + "\n"
                 "depth: " + str(round(report.depth_score, 2)) + "\n"
-                "misconception_type: " + str(report.misconception_type or "none") + "\n"
-                "misconception_detail: " + str(report.misconception_detail or "none") + "\n"
+                "misconception_type: " +
+                str(report.misconception_type or "none") + "\n"
+                "misconception_detail: " +
+                str(report.misconception_detail or "none") + "\n"
                 "confidence_stated: " + str(report.confidence_stated) + "\n"
-                "calibration_delta: " + str(round(report.calibration_delta, 2)) + "\n"
+                "calibration_delta: " +
+                str(round(report.calibration_delta, 2)) + "\n"
                 + engine_summary
             )
-            route = self._llm_route(module.concept, report_summary)
+            route = await self._llm_route(module.concept, report_summary)
             action = route.get("action", "RETEACH")
             reason = route.get("reason", "")
 
+            print("\n" + "=" * 60)
+            print("📝 EVALUATION FEEDBACK")
+            print("=" * 60)
+            print(f"Mastery Score: {round(report.mastery_score * 100)}%")
+            print(f"Correctness:   {round(report.correctness_score * 100)}%")
+            print(f"Depth/Nuance:  {round(report.depth_score * 100)}%")
+            if report.misconception_type and report.misconception_type != "none":
+                print(f"Misconception: {report.misconception_detail}")
+            print("=" * 60)
+
             print(f"\n⚙️  Orchestrator decision: {action} — {reason}")
 
-            # ── Apply routing decision ─────────────────────────────────────────
+            # ── Apply routing decision ───────────────────────────────────────
             if action in ("MOVE_FORWARD", "MOVE_FORWARD_WITH_FLAG"):
                 completed.append(module.id)
                 curriculum.current_index += 1
@@ -379,14 +450,16 @@ class OrchestratorAgent(BaseAgent):
                 new_style = route.get("style_for_reteach")
                 if new_style:
                     self.state.metacognition.preferred_style = new_style
-                    print(f"🔄 Reteaching '{module.concept}' using '{new_style}' style.\n")
+                    print(
+                        f"🔄 Reteaching '{module.concept}' using '{new_style}' style.\n")
                 else:
                     print(f"🔄 Reteaching '{module.concept}'.\n")
 
             elif action == "DETOUR":
                 missing_concept = route.get("missing_concept")
                 if missing_concept:
-                    print(f"↩️  Detour — must learn '{missing_concept}' first.\n")
+                    print(
+                        f"↩️  Detour — must learn '{missing_concept}' first.\n")
                     from core.student_model import Module as CurrModule
                     detour = CurrModule(
                         id=f"detour_{missing_concept.replace(' ', '_')}",
@@ -400,12 +473,15 @@ class OrchestratorAgent(BaseAgent):
                     curriculum.modules.insert(curriculum.current_index, detour)
                     self.state.mark_dirty("curriculum")
                 else:
-                    logger.warning("DETOUR decision has no missing_concept — treating as RETEACH")
+                    logger.warning(
+                        "DETOUR decision has no missing_concept — treating as RETEACH")
                     self.state.metacognition.consecutive_reteach_count += 1
-                    print(f"🔄 Detour requested but no concept specified — reteaching.\n")
+                    print(
+                        "🔄 Detour requested but no concept specified — reteaching.\n")
 
             elif action == "ESCALATE":
-                print(f"\n🚨 '{module.concept}' could not be mastered after repeated attempts.")
+                print(
+                    f"\n🚨 '{module.concept}' could not be mastered after repeated attempts.")
                 print("   Rebuilding curriculum from this point...\n")
                 try:
                     architect = CurriculumArchitectAgent(self.state)
@@ -428,26 +504,29 @@ class OrchestratorAgent(BaseAgent):
                         len(new_plan.modules),
                         module.concept,
                     )
-                    print(f"   New remedial path: {len(new_plan.modules)} modules built.\n")
+                    print(
+                        f"   New remedial path: {len(new_plan.modules)} modules built.\n")
                 except Exception as exc:
                     # Fallback: advance past the blocking concept so the
                     # session is not permanently stuck
-                    logger.error("ESCALATE curriculum rebuild failed: {} — advancing", exc)
-                    print("   Rebuild failed — skipping concept to avoid session lock.\n")
+                    logger.error(
+                        "ESCALATE curriculum rebuild failed: {} — advancing", exc)
+                    print(
+                        "   Rebuild failed — skipping concept to avoid session lock.\n")
                     completed.append(module.id)
                     curriculum.current_index += 1
                     self.state.mark_dirty("curriculum")
                     modules_done += 1
 
             elif action == "COMPRESS":
-                print(f"⚡ Compressing — student is ahead. Accelerating.\n")
+                print("⚡ Compressing — student is ahead. Accelerating.\n")
                 completed.append(module.id)
                 curriculum.current_index += 1
                 self.state.mark_dirty("curriculum")
                 modules_done += 1
 
             elif action == "HOLD":
-                print(f"\n⏸️  Session paused at student request.")
+                print("\n⏸️  Session paused at student request.")
                 break
 
             # Fatigue check
@@ -457,8 +536,7 @@ class OrchestratorAgent(BaseAgent):
 
         return completed
 
-
-    # ── Layer 3: Session end ──────────────────────────────────────────────────
+    # ── Layer 3: Session end ────────────────────────────────────────────────
 
     async def _end_session(self, completed_modules: list[str]) -> None:
         """Flush all session data to DB atomically."""
@@ -467,9 +545,24 @@ class OrchestratorAgent(BaseAgent):
         # the LLM cannot accidentally trigger a new routing cycle.
         # It can only return a plain text summary.
         from clients.groq_client import generate as groq_generate
-        decisions_taken = [d.get("action") for d in self.state.session_decisions] \
-            if self.state.session_decisions and isinstance(self.state.session_decisions[0], dict) \
-            else [getattr(d, "action", "?") for d in self.state.session_decisions]
+
+        decision_records = []
+        for decision in self.state.session_decisions:
+            payload = (
+                decision
+                if isinstance(decision, dict)
+                else decision.model_dump()
+            )
+            decision_records.append({
+                "student_id": self.state.student_id,
+                "session_id": self.state.session_id,
+                "agent": payload.get("agent", "adaptation_engine"),
+                "action": payload.get("action", "UNKNOWN"),
+                "rationale": payload.get("reason", ""),
+                "payload": payload,
+            })
+
+        decisions_taken = [d["action"] for d in decision_records]
 
         summary = await groq_generate(
             messages=[{
@@ -487,6 +580,15 @@ class OrchestratorAgent(BaseAgent):
             system="You are a helpful tutor summarising a learning session. Be concise and encouraging.",
         )
 
+        completed_ids = set(completed_modules)
+        completed_concepts = set(completed_modules)
+        if self.state.curriculum:
+            completed_concepts.update({
+                module.concept
+                for module in self.state.curriculum.modules
+                if module.id in completed_ids or module.concept in completed_ids
+            })
+
         # Build mastery updates for atomic write
         mastery_updates = [
             {
@@ -496,7 +598,7 @@ class OrchestratorAgent(BaseAgent):
                 "depth": self.state.concept_depth.get(concept, 0.0),
             }
             for concept, score in self.state.concept_mastery.items()
-            if concept in completed_modules
+            if concept in completed_concepts
         ]
 
         # Single atomic transaction
@@ -507,17 +609,17 @@ class OrchestratorAgent(BaseAgent):
             summary=summary,
             modules_covered=completed_modules,
             started_at=self.state.session_started_at,
-            decisions=self.state.session_decisions,
+            decisions=decision_records,
             metacognition_json=self.state.metacognition.model_dump(),
             mastery_updates=mastery_updates,
         )
 
-        print(f"\n{'='*60}")
-        print(f"✅ Session complete!")
+        print(f"\n{'=' * 60}")
+        print("✅ Session complete!")
         print(f"   {summary}")
-        print(f"{'='*60}\n")
-    
-    # ── Micro-example injection ───────────────────────────────────────────────
+        print(f"{'=' * 60}\n")
+
+    # ── Micro-example injection ─────────────────────────────────────────────
 
     def _inject_micro_example(self, concept: str) -> None:
         """
@@ -551,11 +653,12 @@ class OrchestratorAgent(BaseAgent):
             f"- End with one sentence explaining WHY each step works"
         )
 
-        messages = [{"role": "user", "content": f"Worked example for: {concept}"}]
+        messages = [
+            {"role": "user", "content": f"Worked example for: {concept}"}]
 
-        print(f"\n{'─'*50}")
+        print(f"\n{'─' * 50}")
         print(f"📌 Worked Example: {concept}")
-        print(f"{'─'*50}\n")
+        print(f"{'─' * 50}\n")
 
         try:
             full_text = []
@@ -571,15 +674,18 @@ class OrchestratorAgent(BaseAgent):
             )
 
         except GroqTimeoutError:
-            logger.warning("Micro-example stream timed out for concept='{}'", concept)
-            print(f"\n[Worked example unavailable — Groq timeout]\n")
+            logger.warning(
+                "Micro-example stream timed out for concept='{}'",
+                concept)
+            print("\n[Worked example unavailable — Groq timeout]\n")
 
         except GroqRateLimitError:
-            logger.warning("Micro-example rate-limited for concept='{}'", concept)
-            print(f"\n[Worked example unavailable — rate limit]\n")
+            logger.warning(
+                "Micro-example rate-limited for concept='{}'",
+                concept)
+            print("\n[Worked example unavailable — rate limit]\n")
 
-
-    # ── Main entry point ──────────────────────────────────────────────────────
+    # ── Main entry point ────────────────────────────────────────────────────
 
     async def _check_cross_session_doubts(self) -> None:
         """
@@ -608,7 +714,8 @@ class OrchestratorAgent(BaseAgent):
                     self.state.student_id,
                 )
         except Exception as e:
-            logger.warning("Cross-session doubt query failed: {} — skipping", e)
+            logger.warning(
+                "Cross-session doubt query failed: {} — skipping", e)
             return
 
         if not rows:
@@ -618,7 +725,8 @@ class OrchestratorAgent(BaseAgent):
         inserted = 0
         for row in rows:
             concept = row["concept"]
-            # Don't insert if this concept is already the current or next module
+            # Don't insert if this concept is already the current or next
+            # module
             current_concepts = {
                 m.concept for m in curriculum.modules[curriculum.current_index:]
             }
@@ -663,14 +771,14 @@ class OrchestratorAgent(BaseAgent):
         self.state.start_session()
         topic = ""
 
-        # ── Cross-session doubt detection ─────────────────────────────────────
+        # ── Cross-session doubt detection ────────────────────────────────────
         # Reads doubt_log to find concepts the student has doubted across
         # multiple sessions — a signal of a persistent knowledge gap.
         # If found, a prerequisite detour module is prepended before the loop.
         if not is_new and self.state.curriculum:
             await self._check_cross_session_doubts()
 
-        # ── Layer 1: Onboarding (first session only) ──────────────────────────
+        # ── Layer 1: Onboarding (first session only) ─────────────────────────
         if is_new or not self.state.curriculum:
             topic = await self._onboard()
             architect = CurriculumArchitectAgent(self.state)
@@ -681,13 +789,14 @@ class OrchestratorAgent(BaseAgent):
             print(f"   Progress: module {self.state.curriculum.current_index + 1}"
                   f"/{len(self.state.curriculum.modules)}\n")
 
-        # ── Layer 2: Module loop ──────────────────────────────────────────────
+        # ── Layer 2: Module loop ─────────────────────────────────────────────
         completed = await self._run_module_loop()
 
         # Check if curriculum is complete
         if (self.state.curriculum and
                 self.state.curriculum.current_index >= len(self.state.curriculum.modules)):
-            print(f"\n🎉 Curriculum complete! You've mastered all modules in '{self.state.curriculum.topic}'!")
+            print(
+                f"\n🎉 Curriculum complete! You've mastered all modules in '{self.state.curriculum.topic}'!")
 
-        # ── Layer 3: Session end ──────────────────────────────────────────────
+        # ── Layer 3: Session end ─────────────────────────────────────────────
         await self._end_session(completed)

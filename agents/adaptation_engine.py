@@ -95,9 +95,9 @@ class AdaptationEngine(BaseAgent):
                 required=["action", "reason"],
             ),
         ]
-    # ── Gap Analysis ──────────────────────────────────────────────────────────
+    # ── Gap Analysis ────────────────────────────────────────────────────────
 
-    def run_gap_analysis(self) -> str | None:
+    async def run_gap_analysis(self) -> str | None:
         """
         Every 3 evaluation cycles, analyse the session's evaluation history
         for a pattern of weakness indicating a missing prerequisite.
@@ -148,7 +148,7 @@ ANALYSIS RULES:
    - action = "DETOUR"
    - missing_concept = the prerequisite the student is most likely missing
    - reason = one sentence explaining the pattern
-   
+
    OR if no clear prerequisite gap exists:
    - action = "RETEACH"
    - reason = "No single prerequisite gap identified; recommend style change"
@@ -157,7 +157,7 @@ The missing_concept field is the KEY OUTPUT — it must be a specific, teachable
 concept name (e.g. "function closures", "Newton's Second Law", "gradient descent").
 """
 
-        result = self.run(
+        result = await self.arun(
             system=system,
             user_message=(
                 f"Gap analysis: student failed {len(weak)}/3 recent concepts.\n\n"
@@ -174,17 +174,23 @@ concept name (e.g. "function closures", "Newton's Second Law", "gradient descent
         if action == "DETOUR" and missing:
             self._log_decision(
                 action="GAP_DETECTED",
-                reason=result.get("reason", f"Gap analysis found missing: {missing}"),
-                payload={"missing_concept": missing, "weak_concepts": weak_concepts},
+                reason=result.get(
+                    "reason", f"Gap analysis found missing: {missing}"),
+                payload={
+                    "missing_concept": missing,
+                    "weak_concepts": weak_concepts},
             )
-            logger.info("Gap analysis found missing prerequisite: '{}'", missing)
+            logger.info(
+                "Gap analysis found missing prerequisite: '{}'",
+                missing)
             return missing
 
-        logger.info("Gap analysis: no clear prerequisite gap in {}", weak_concepts)
+        logger.info(
+            "Gap analysis: no clear prerequisite gap in {}",
+            weak_concepts)
         return None
 
-
-    # ── Tool executor ─────────────────────────────────────────────────────────
+    # ── Tool executor ───────────────────────────────────────────────────────
 
     def _execute_tool(self, tool_name: str, args: dict) -> str:
         meta = self.state.metacognition
@@ -201,7 +207,7 @@ concept name (e.g. "function closures", "Newton's Second Law", "gradient descent
 
             if focus == "style":
                 scores_summary = {
-                    s: round(sum(v)/len(v), 2)
+                    s: round(sum(v) / len(v), 2)
                     for s, v in meta.style_depth_scores.items() if v
                 }
                 return (
@@ -249,13 +255,14 @@ concept name (e.g. "function closures", "Newton's Second Law", "gradient descent
                     "\n".join(results) +
                     f"\n\nWeak prerequisites: {weak}. Consider DETOUR to: {weak[0]}"
                 )
-            return f"All prerequisites met for '{concept}':\n" + "\n".join(results)
+            return f"All prerequisites met for '{concept}':\n" + \
+                "\n".join(results)
 
         return super()._execute_tool(tool_name, args)
 
-    # ── Public run method ─────────────────────────────────────────────────────
+    # ── Public run method ───────────────────────────────────────────────────
 
-    def decide(self, report: EvaluationReport) -> AdaptationDecision:
+    async def decide(self, report: EvaluationReport) -> AdaptationDecision:
         """
         Analyse an EvaluationReport and decide the next action.
 
@@ -267,7 +274,7 @@ concept name (e.g. "function closures", "Newton's Second Law", "gradient descent
         """
         meta = self.state.metacognition
         module = self._current_module()
-        concept = module.concept if module else report.concept
+        module.concept if module else report.concept
 
         system = f"""You are an adaptation engine for an adaptive learning system.
 Analyse the student's evaluation result and decide the optimal next action.
@@ -312,7 +319,7 @@ METACOGNITION UPDATE RULES:
 - depth_score < 0.5 for 2nd time → set depth_concern_flag=true
 """
 
-        result = self.run(
+        result = await self.arun(
             system=system,
             user_message=(
                 f"Decide the next action after evaluating concept '{report.concept}'. "
@@ -327,25 +334,30 @@ METACOGNITION UPDATE RULES:
         missing_concept = result.get("missing_concept")
         meta_updates = result.get("metacognition_updates", {})
 
-        # ── Apply metacognition updates ───────────────────────────────────────
+        # ── Apply metacognition updates ──────────────────────────────────────
         if isinstance(meta_updates, dict):
             if "consecutive_reteach_count" in meta_updates:
-                meta.consecutive_reteach_count = int(meta_updates["consecutive_reteach_count"])
+                meta.consecutive_reteach_count = int(
+                    meta_updates["consecutive_reteach_count"])
             if "depth_concern_flag" in meta_updates:
-                meta.depth_concern_flag = bool(meta_updates["depth_concern_flag"])
+                meta.depth_concern_flag = bool(
+                    meta_updates["depth_concern_flag"])
 
         # Safety override — if reteach count >= 3, force ESCALATE
         if meta.consecutive_reteach_count >= 3 and action == "RETEACH":
             action = "ESCALATE"
             reason = f"Auto-escalated after {meta.consecutive_reteach_count} reteach cycles"
-            logger.warning("ESCALATE triggered after {} reteach cycles", meta.consecutive_reteach_count)
+            logger.warning(
+                "ESCALATE triggered after {} reteach cycles",
+                meta.consecutive_reteach_count)
 
         decision = AdaptationDecision(
             action=action,
             reason=reason,
             style_for_reteach=style_for_reteach if style_for_reteach != "none" else None,
             missing_concept=missing_concept,
-            metacognition_updates=meta_updates if isinstance(meta_updates, dict) else {},
+            metacognition_updates=meta_updates if isinstance(
+                meta_updates, dict) else {},
         )
 
         self._log_decision(action, reason, decision.model_dump())

@@ -6,19 +6,18 @@ tests/test_phase2.py
 Run: pytest tests/test_phase2.py -v -s
 """
 
-import json
-import sys, os
+from clients import tavily_client
+from clients.groq_client import tool_call_loop, generate, stream
+import pytest
+from dotenv import load_dotenv
+import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from dotenv import load_dotenv
 load_dotenv()
 
-import pytest
-from clients.groq_client import tool_call_loop, generate, stream
-from clients import tavily_client
 
-
-# ── Toy tool definitions ──────────────────────────────────────────────────────
+# ── Toy tool definitions ────────────────────────────────────────────────
 
 GREET_TOOL = {
     "type": "function",
@@ -53,21 +52,21 @@ CONCLUDE_TOOL = {
 }
 
 
-def toy_executor(tool_name: str, args_str: str) -> str:
-    args = json.loads(args_str)
+def toy_executor(tool_name: str, args: dict) -> str:
     if tool_name == "greet_student":
         return f"Greeted {args['name']} successfully."
     return "done"
 
 
-# ── Tests ─────────────────────────────────────────────────────────────────────
+# ── Tests ───────────────────────────────────────────────────────────────
 
-def test_tool_call_loop_calls_terminal_tool():
+@pytest.mark.asyncio
+async def test_tool_call_loop_calls_terminal_tool():
     """
     LLM should: call greet_student → then call conclude_session (terminal).
     We verify the terminal result contains expected keys.
     """
-    result = tool_call_loop(
+    result = await tool_call_loop(
         system=(
             "You are a session starter. "
             "First call greet_student to greet the student. "
@@ -87,9 +86,10 @@ def test_tool_call_loop_calls_terminal_tool():
     print(f"   ready   = {result['ready']}")
 
 
-def test_generate_returns_string():
+@pytest.mark.asyncio
+async def test_generate_returns_string():
     """generate() should return a non-empty string."""
-    result = generate(
+    result = await generate(
         messages=[{"role": "user", "content": "Say hello in one word."}],
     )
     print(f"\n✅ generate() returned: '{result}'")
@@ -100,7 +100,8 @@ def test_generate_returns_string():
 def test_stream_yields_chunks():
     """stream() should yield multiple string chunks."""
     chunks = list(stream(
-        messages=[{"role": "user", "content": "Count from 1 to 5, one number per word."}],
+        messages=[
+            {"role": "user", "content": "Count from 1 to 5, one number per word."}],
     ))
     full = "".join(chunks)
     print(f"\n✅ stream() yielded {len(chunks)} chunks: '{full[:80]}'")

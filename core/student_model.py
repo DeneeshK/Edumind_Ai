@@ -6,7 +6,6 @@ Never import or redefine these elsewhere.
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime
 from typing import Any, Literal, Optional
@@ -16,7 +15,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 from config import settings
 
 
-# ── Metacognition Profile ─────────────────────────────────────────────────────
+# ── Metacognition Profile ───────────────────────────────────────────────
 
 class MetacognitionProfile(BaseModel):
     # Style evidence — {style_name: [depth_scores per session]}
@@ -78,7 +77,7 @@ class MetacognitionProfile(BaseModel):
             self.calibration_pattern = "calibrated"
 
 
-# ── Curriculum ────────────────────────────────────────────────────────────────
+# ── Curriculum ──────────────────────────────────────────────────────────
 
 class Module(BaseModel):
     id: str
@@ -99,7 +98,7 @@ class CurriculumPlan(BaseModel):
     version: int = 1
 
 
-# ── Evaluation ────────────────────────────────────────────────────────────────
+# ── Evaluation ──────────────────────────────────────────────────────────
 
 class EvaluationReport(BaseModel):
     concept: str
@@ -120,7 +119,7 @@ class EvaluationReport(BaseModel):
     ]
 
 
-# ── Adaptation ────────────────────────────────────────────────────────────────
+# ── Adaptation ──────────────────────────────────────────────────────────
 
 class AdaptationDecision(BaseModel):
     action: str
@@ -131,7 +130,7 @@ class AdaptationDecision(BaseModel):
     metacognition_updates: dict[str, Any] = Field(default_factory=dict)
 
 
-# ── Student State ─────────────────────────────────────────────────────────────
+# ── Student State ───────────────────────────────────────────────────────
 
 class StudentState(BaseModel):
     # Identity
@@ -169,7 +168,7 @@ class StudentState(BaseModel):
     # Private dirty-tracking set (excluded from serialisation)
     _dirty: set[str] = PrivateAttr(default_factory=set)
 
-    # ── Pace threshold ────────────────────────────────────────────────────────
+    # ── Pace threshold ──────────────────────────────────────────────────────
     @property
     def advance_threshold(self) -> float:
         return {
@@ -177,8 +176,8 @@ class StudentState(BaseModel):
             "medium": settings.mastery_threshold_medium,
             "deep": settings.mastery_threshold_deep
         }[self.pace]
-        
-    # ── Dirty tracking ────────────────────────────────────────────────────────
+
+    # ── Dirty tracking ──────────────────────────────────────────────────────
 
     def mark_dirty(self, field: str) -> None:
         self._dirty.add(field)
@@ -188,7 +187,8 @@ class StudentState(BaseModel):
 
     # ── Knowledge updates ────────────────────────────────────────────────────
 
-    def update_mastery(self, concept: str, correctness: float, depth: float) -> None:
+    def update_mastery(self, concept: str, correctness: float,
+                       depth: float) -> None:
         # Safety floor on depth prevents zero-division in derived calculations
         # and ensures mastery never collapses to correctness-only silently
         safe_depth = max(0.001, depth)
@@ -314,7 +314,8 @@ class StudentState(BaseModel):
         if "concept_mastery" in self._dirty:
             for concept, mastery in self.concept_mastery.items():
                 depth = self.concept_depth.get(concept, 0.0)
-                correctness = (mastery - 0.4 * depth) / 0.6 if depth else mastery
+                correctness = (mastery - 0.4 * depth) / \
+                    0.6 if depth else mastery
                 await upsert_concept_mastery(
                     self.student_id, concept, correctness, depth
                 )

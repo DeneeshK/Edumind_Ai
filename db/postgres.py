@@ -44,7 +44,7 @@ async def get_conn() -> AsyncGenerator[asyncpg.Connection, None]:
         yield conn
 
 
-# ── Schema ────────────────────────────────────────────────────────────────────
+# ── Schema ──────────────────────────────────────────────────────────────
 _SCHEMA_SQL = """
 -- 1. students
 CREATE TABLE IF NOT EXISTS students (
@@ -169,7 +169,8 @@ async def init_db(max_retries: int = 5, retry_delay: float = 2.0) -> None:
     import asyncio as _asyncio
     global _pool
 
-    raw_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
+    raw_url = settings.database_url.replace(
+        "postgresql+asyncpg://", "postgresql://")
 
     for attempt in range(1, max_retries + 1):
         try:
@@ -187,9 +188,15 @@ async def init_db(max_retries: int = 5, retry_delay: float = 2.0) -> None:
             logger.info("DB pool ready and schema applied.")
             return
         except Exception as e:
-            logger.warning("DB connection attempt {}/{} failed: {}", attempt, max_retries, e)
+            logger.warning(
+                "DB connection attempt {}/{} failed: {}",
+                attempt,
+                max_retries,
+                e)
             if attempt == max_retries:
-                logger.error("All {} DB connection attempts failed. Giving up.", max_retries)
+                logger.error(
+                    "All {} DB connection attempts failed. Giving up.",
+                    max_retries)
                 raise
             wait = retry_delay * (2 ** (attempt - 1))  # exponential backoff
             logger.info("Retrying in {:.1f}s…", wait)
@@ -205,7 +212,7 @@ async def close_db() -> None:
         logger.info("DB pool closed.")
 
 
-# ── Convenience helpers ───────────────────────────────────────────────────────
+# ── Convenience helpers ─────────────────────────────────────────────────
 
 async def upsert_student(
     student_id: str,
@@ -365,20 +372,29 @@ async def flush_session_to_db(
             )
             # Decision log
             if decisions:
+                decision_records = []
+                for d in decisions:
+                    data = d if isinstance(d, dict) else d.model_dump()
+                    payload = data.get("payload", data)
+                    if not isinstance(payload, dict):
+                        payload = {"value": payload}
+                    decision_records.append((
+                        data.get("student_id", student_id),
+                        data.get("session_id", session_id),
+                        data.get(
+                            "agent", payload.get(
+                                "agent", "adaptation_engine")),
+                        data.get("action", payload.get("action", "UNKNOWN")),
+                        data.get("rationale", payload.get("reason", "")),
+                        json.dumps(payload),
+                    ))
                 await conn.executemany(
                     """
                     INSERT INTO decision_log
                       (student_id, session_id, agent, action, rationale, payload_json)
                     VALUES ($1,$2,$3,$4,$5,$6)
                     """,
-                    [
-                        (
-                            d["student_id"], d["session_id"], d["agent"],
-                            d["action"], d.get("rationale", ""),
-                            json.dumps(d.get("payload", {})),
-                        )
-                        for d in decisions
-                    ],
+                    decision_records,
                 )
             # Metacognition
             await conn.execute(

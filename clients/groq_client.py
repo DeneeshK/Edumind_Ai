@@ -13,29 +13,35 @@ from __future__ import annotations
 
 import json
 import asyncio
-import time
+import inspect
 from collections.abc import Generator
 from typing import Any, Callable
 
 from groq import Groq
-from groq import RateLimitError, APITimeoutError
+from groq import RateLimitError, APITimeoutError, BadRequestError
 from loguru import logger
 
 from config import settings
 
 
-# ── Custom exceptions ─────────────────────────────────────────────────────────
+# ── Custom exceptions ───────────────────────────────────────────────────
 
 class GroqTimeoutError(Exception):
     pass
+
 
 class GroqRateLimitError(Exception):
     pass
 
 
-# ── Client singleton ──────────────────────────────────────────────────────────
+class GroqBadRequestError(Exception):
+    pass
+
+
+# ── Client singleton ────────────────────────────────────────────────────
 
 _client: Groq | None = None
+
 
 def get_client() -> Groq:
     global _client
@@ -44,26 +50,40 @@ def get_client() -> Groq:
     return _client
 
 
-# ── Retry helper ──────────────────────────────────────────────────────────────
+# ── Retry helper ────────────────────────────────────────────────────────
 
 async def _with_retry(fn: Callable, *args, **kwargs) -> Any:
     """
-    Call fn(*args, **kwargs) with up to 3 retries on 429.
+    Call fn(*args, **kwargs) with up to 3 retries on 429 and 400 (malformed tool calls).
     Uses asyncio.sleep so the event loop is never blocked.
-    Raises GroqTimeoutError on timeout, GroqRateLimitError if retries exhausted.
+    Raises GroqTimeoutError on timeout, GroqRateLimitError/GroqBadRequestError if retries exhausted.
     """
-    delays = [1, 2, 4]  # exponential backoff seconds
+    delays = [2, 5, 10, 20]  # exponential backoff seconds
     for attempt, delay in enumerate(delays, 1):
         try:
             return fn(*args, **kwargs)
         except APITimeoutError as e:
-            raise GroqTimeoutError(f"Groq timed out after {settings.groq_timeout_seconds}s") from e
+            raise GroqTimeoutError(
+                f"Groq timed out after {settings.groq_timeout_seconds}s") from e
         except RateLimitError as e:
             if attempt == len(delays):
-                raise GroqRateLimitError("Groq rate limit exceeded after 3 retries") from e
-            logger.warning("Rate limited by Groq (attempt {}). Retrying in {}s…", attempt, delay)
+                raise GroqRateLimitError(
+                    "Groq rate limit exceeded after 3 retries") from e
+            logger.warning(
+                "Rate limited by Groq (attempt {}). Retrying in {}s…",
+                attempt,
+                delay)
             await asyncio.sleep(delay)   # non-blocking — event loop stays free
-        except Exception as e:
+        except BadRequestError as e:
+            if attempt == len(delays):
+                raise GroqBadRequestError(
+                    f"Groq bad request (e.g. malformed JSON) after 3 retries: {e}") from e
+            logger.warning(
+                "Bad request from Groq (attempt {}). Likely a malformed tool call. Retrying in {}s…",
+                attempt,
+                delay)
+            await asyncio.sleep(delay)
+        except Exception:
             raise
 
 
@@ -76,7 +96,7 @@ async def generate(
 ) -> str:
     """
     Single completion. Returns the assistant's text response.
-    
+
     Args:
         messages: list of {role, content} dicts (user/assistant turns)
         model: override model (defaults to generation_model)
@@ -101,7 +121,7 @@ async def generate(
     return response.choices[0].message.content
 
 
-# ── tool_call_loop() ──────────────────────────────────────────────────────────
+# ── tool_call_loop() ────────────────────────────────────────────────────
 
 async def tool_call_loop(
     system: str,
@@ -135,7 +155,8 @@ async def tool_call_loop(
 
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": user_message + ("\n\n" + context if context else "")},
+        {"role": "user", "content": user_message +
+            ("\n\n" + context if context else "")},
     ]
 
     terminal_result: dict = {}
@@ -156,7 +177,7 @@ async def tool_call_loop(
         response = await _with_retry(_call)
         message = response.choices[0].message
 
-        # ── LLM chose to call tool(s) ─────────────────────────────────────────
+        # ── LLM chose to call tool(s) ────────────────────────────────────────
         if message.tool_calls:
             # Append assistant message with tool_calls
             messages.append({
@@ -178,18 +199,21 @@ async def tool_call_loop(
             for tool_call in message.tool_calls:
                 name = tool_call.function.name
                 args_str = tool_call.function.arguments
-                logger.info("LLM called tool: {} args: {}", name, args_str[:120])
+                logger.info("LLM called tool: {} args: {}",
+                            name, args_str[:120])
 
                 # Parse args_str to dict — with safe fallback for malformed JSON.
                 # Strategy: fix known Python-literal issues first (True/False/None),
-                # then parse. Never use regex to strip structure — that corrupts valid args.
+                # then parse. Never use regex to strip structure — that
+                # corrupts valid args.
                 args_dict: dict = {}
                 try:
                     import re as _re
                     cleaned = _re.sub(r'\bTrue\b', 'true', args_str)
                     cleaned = _re.sub(r'\bFalse\b', 'false', cleaned)
                     cleaned = _re.sub(r'\bNone\b', 'null', cleaned)
-                    # If the model wrapped the JSON in an outer array, unwrap it
+                    # If the model wrapped the JSON in an outer array, unwrap
+                    # it
                     cleaned = cleaned.strip()
                     if cleaned.startswith('[') and cleaned.endswith(']'):
                         inner = cleaned[1:-1].strip()
@@ -213,17 +237,20 @@ async def tool_call_loop(
                 if name == terminal_tool_name:
                     # Strip to only fields defined in the terminal tool schema
                     terminal_tool_schema = next(
-                        (t for t in tools if t["function"]["name"] == name), None
+                        (t for t in tools if t["function"]
+                         ["name"] == name), None
                     )
                     if terminal_tool_schema:
                         allowed = set(
                             terminal_tool_schema["function"]["parameters"]
                             .get("properties", {}).keys()
                         )
-                        terminal_result = {k: v for k, v in args_dict.items() if k in allowed}
+                        terminal_result = {
+                            k: v for k, v in args_dict.items() if k in allowed}
                     else:
                         terminal_result = args_dict
-                    logger.info("Terminal tool '{}' called — exiting loop.", name)
+                    logger.info(
+                        "Terminal tool '{}' called — exiting loop.", name)
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
@@ -235,6 +262,8 @@ async def tool_call_loop(
                 if tool_executor:
                     try:
                         result = tool_executor(name, args_dict)
+                        if inspect.isawaitable(result):
+                            result = await result
                         result_str = str(result)
                     except Exception as e:
                         result_str = f"ERROR: {e}"
@@ -253,11 +282,13 @@ async def tool_call_loop(
             logger.info("LLM gave text response — loop ends.")
             return {"text_response": message.content}
 
-    logger.warning("tool_call_loop hit max_iterations ({}) — returning empty.", max_iterations)
+    logger.warning(
+        "tool_call_loop hit max_iterations ({}) — returning empty.",
+        max_iterations)
     return {}
 
 
-# ── stream() ──────────────────────────────────────────────────────────────────
+# ── stream() ────────────────────────────────────────────────────────────
 
 def stream(
     messages: list[dict],
