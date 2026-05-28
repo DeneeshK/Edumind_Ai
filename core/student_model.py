@@ -6,8 +6,9 @@ Never import or redefine these elsewhere.
 
 from __future__ import annotations
 
+import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, PrivateAttr
@@ -15,7 +16,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 from config import settings
 
 
-# ── Metacognition Profile ───────────────────────────────────────────────
+# ── Metacognition Profile ─────────────────────────────────────────────────────
 
 class MetacognitionProfile(BaseModel):
     # Style evidence — {style_name: [depth_scores per session]}
@@ -77,7 +78,7 @@ class MetacognitionProfile(BaseModel):
             self.calibration_pattern = "calibrated"
 
 
-# ── Curriculum ──────────────────────────────────────────────────────────
+# ── Curriculum ────────────────────────────────────────────────────────────────
 
 class Module(BaseModel):
     id: str
@@ -87,6 +88,98 @@ class Module(BaseModel):
     prerequisites: list[str]
     estimated_minutes: int
     depth_level: Literal["surface", "standard", "deep"]
+    purpose: str = ""
+    why_it_matters_for_goal: str = ""
+    difficulty: str = ""
+    must_teach: list[str] = Field(default_factory=list)
+    examples_to_include: list[str] = Field(default_factory=list)
+    practice_type: str = ""
+    concepts_taught: list[str] = Field(default_factory=list)
+    depends_on_concepts: list[str] = Field(default_factory=list)
+    unlocks_concepts: list[str] = Field(default_factory=list)
+    module_goal: str = ""
+    why_now: str = ""
+    what_this_module_will_not_cover: list[str] = Field(default_factory=list)
+    lesson_requirements: list[str] = Field(default_factory=list)
+    practice_requirements: list[str] = Field(default_factory=list)
+    question_scope: list[str] = Field(default_factory=list)
+    roadmap_step_id: str = ""
+
+
+class IntentAnalysis(BaseModel):
+    subject: str
+    exact_subject: str
+    target_context: str
+    course_type: str
+    learner_stage: str
+    must_include: list[str] = Field(default_factory=list)
+    should_avoid: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    confidence: float = 0.7
+    reasoning: str = ""
+    is_ambiguous: bool = False
+
+
+class ResearchQuery(BaseModel):
+    query: str
+    category: str
+    priority: int
+
+
+class ResearchSummary(BaseModel):
+    queries_run: list[ResearchQuery] = Field(default_factory=list)
+    raw_results: dict[str, str] = Field(default_factory=dict)
+    summary_by_category: dict[str, str] = Field(default_factory=dict)
+    coverage_confidence: float = 0.5
+    full_text: str = ""
+
+
+class RoadmapStep(BaseModel):
+    step_id: str
+    title: str
+    concept_cluster: str
+    subtopics: list[str] = Field(default_factory=list)
+    prerequisites: list[str] = Field(default_factory=list)
+    estimated_minutes: int = 30
+    why_this_step_exists: str = ""
+    goal_alignment: str = ""
+    depth_level: str = "standard"
+    module_generation_hint: str = ""
+    must_teach: list[str] = Field(default_factory=list)
+    examples_to_include: list[str] = Field(default_factory=list)
+    practice_requirements: list[str] = Field(default_factory=list)
+    lesson_requirements: list[str] = Field(default_factory=list)
+    question_scope: list[str] = Field(default_factory=list)
+    check_question_targets: list[str] = Field(default_factory=list)
+    success_criteria: list[str] = Field(default_factory=list)
+    teaching_sequence: list[str] = Field(default_factory=list)
+    mini_task: str = ""
+    learning_objective: str = ""
+    do_not_cover: list[str] = Field(default_factory=list)
+    module_split_hint: str = ""
+    is_optional: bool = False
+
+
+class MasterRoadmap(BaseModel):
+    course_id: str = ""
+    topic: str
+    goal: str
+    steps: list[RoadmapStep]
+    total_estimated_minutes: int = 0
+    rationale: str = ""
+    created_at: str = ""
+    research_summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class CurriculumDecisionLog(BaseModel):
+    course_id: str
+    intent_analysis: dict[str, Any] = Field(default_factory=dict)
+    research_summary: dict[str, Any] = Field(default_factory=dict)
+    scope_decision: dict[str, Any] = Field(default_factory=dict)
+    roadmap_step_count: int = 0
+    module_count: int = 0
+    module_count_vs_scope_estimate: str = ""
+    decisions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CurriculumPlan(BaseModel):
@@ -96,9 +189,17 @@ class CurriculumPlan(BaseModel):
     modules: list[Module]
     current_index: int = 0
     version: int = 1
+    scope_analysis: dict[str, Any] = Field(default_factory=dict)
+    concept_inventory: dict[str, Any] = Field(default_factory=dict)
+    prerequisite_graph: dict[str, list[str]] = Field(default_factory=dict)
+    learning_path: list[dict[str, Any]] = Field(default_factory=list)
+    roadmap_steps: list[str] = Field(default_factory=list)
+    schedule_plan: list[dict[str, Any]] = Field(default_factory=list)
+    repair_history: list[dict[str, Any]] = Field(default_factory=list)
+    validation_result: dict[str, Any] = Field(default_factory=dict)
 
 
-# ── Evaluation ──────────────────────────────────────────────────────────
+# ── Evaluation ────────────────────────────────────────────────────────────────
 
 class EvaluationReport(BaseModel):
     concept: str
@@ -119,7 +220,7 @@ class EvaluationReport(BaseModel):
     ]
 
 
-# ── Adaptation ──────────────────────────────────────────────────────────
+# ── Adaptation ────────────────────────────────────────────────────────────────
 
 class AdaptationDecision(BaseModel):
     action: str
@@ -130,7 +231,7 @@ class AdaptationDecision(BaseModel):
     metacognition_updates: dict[str, Any] = Field(default_factory=dict)
 
 
-# ── Student State ───────────────────────────────────────────────────────
+# ── Student State ─────────────────────────────────────────────────────────────
 
 class StudentState(BaseModel):
     # Identity
@@ -155,8 +256,12 @@ class StudentState(BaseModel):
     # Session-scoped (reset each session; NOT written mid-session)
     session_id: str = ""
     session_doubt_counts: dict[str, int] = Field(default_factory=dict)
+    session_doubt_types: dict[str, dict[str, int]] = Field(default_factory=dict)
     session_decisions: list[AdaptationDecision] = Field(default_factory=list)
     session_response_times: list[float] = Field(default_factory=list)
+    # Lesson text delivered during this session, keyed by module id.
+    # EvaluatorAgent uses this as the authoritative source for check questions.
+    session_module_content: dict[str, str] = Field(default_factory=dict)
     # In-memory log of EvaluationReports for this session.
     # Populated by EvaluatorAgent after each evaluation.
     # Used by AdaptationEngine.run_gap_analysis() — never persisted here
@@ -168,7 +273,7 @@ class StudentState(BaseModel):
     # Private dirty-tracking set (excluded from serialisation)
     _dirty: set[str] = PrivateAttr(default_factory=set)
 
-    # ── Pace threshold ──────────────────────────────────────────────────────
+    # ── Pace threshold ────────────────────────────────────────────────────────
     @property
     def advance_threshold(self) -> float:
         return {
@@ -176,8 +281,8 @@ class StudentState(BaseModel):
             "medium": settings.mastery_threshold_medium,
             "deep": settings.mastery_threshold_deep
         }[self.pace]
-
-    # ── Dirty tracking ──────────────────────────────────────────────────────
+        
+    # ── Dirty tracking ────────────────────────────────────────────────────────
 
     def mark_dirty(self, field: str) -> None:
         self._dirty.add(field)
@@ -187,8 +292,7 @@ class StudentState(BaseModel):
 
     # ── Knowledge updates ────────────────────────────────────────────────────
 
-    def update_mastery(self, concept: str, correctness: float,
-                       depth: float) -> None:
+    def update_mastery(self, concept: str, correctness: float, depth: float) -> None:
         # Safety floor on depth prevents zero-division in derived calculations
         # and ensures mastery never collapses to correctness-only silently
         safe_depth = max(0.001, depth)
@@ -206,13 +310,38 @@ class StudentState(BaseModel):
     # ── Doubt tracking ───────────────────────────────────────────────────────
 
     def log_doubt(self, concept: str, doubt_type: str = "general") -> None:
+        doubt_type = (doubt_type or "general").strip() or "general"
         self.session_doubt_counts[concept] = (
             self.session_doubt_counts.get(concept, 0) + 1
+        )
+        if concept not in self.session_doubt_types:
+            self.session_doubt_types[concept] = {}
+        self.session_doubt_types[concept][doubt_type] = (
+            self.session_doubt_types[concept].get(doubt_type, 0) + 1
         )
         self.mark_dirty("session_doubt_counts")
 
     def get_doubt_count(self, concept: str) -> int:
         return self.session_doubt_counts.get(concept, 0)
+
+    # ── Module content tracking ──────────────────────────────────────────────
+
+    def record_module_content(self, module_id: str, text: str) -> None:
+        """Append delivered lesson/module text for grounded evaluation."""
+        clean_text = text.strip()
+        if not module_id or not clean_text:
+            return
+
+        existing = self.session_module_content.get(module_id, "")
+        if existing:
+            self.session_module_content[module_id] = existing + "\n\n" + clean_text
+        else:
+            self.session_module_content[module_id] = clean_text
+        self.mark_dirty("session_module_content")
+
+    def get_module_content(self, module_id: str) -> str:
+        """Return lesson/module text recorded for the current session."""
+        return self.session_module_content.get(module_id, "")
 
     # ── Session management ───────────────────────────────────────────────────
 
@@ -222,11 +351,13 @@ class StudentState(BaseModel):
         clear_cache()  # prevent stale Tavily results leaking across sessions
         self.session_id = str(uuid.uuid4())
         self.session_doubt_counts = {}
+        self.session_doubt_types = {}
         self.session_decisions = []
         self.session_response_times = []
+        self.session_module_content = {}
         self.evaluation_history = []
         self.evaluation_cycle_count = 0
-        self.session_started_at = datetime.utcnow()
+        self.session_started_at = datetime.now(timezone.utc)
         return self.session_id
 
     def add_decision(self, decision: AdaptationDecision) -> None:
@@ -314,8 +445,7 @@ class StudentState(BaseModel):
         if "concept_mastery" in self._dirty:
             for concept, mastery in self.concept_mastery.items():
                 depth = self.concept_depth.get(concept, 0.0)
-                correctness = (mastery - 0.4 * depth) / \
-                    0.6 if depth else mastery
+                correctness = (mastery - 0.4 * depth) / 0.6 if depth else mastery
                 await upsert_concept_mastery(
                     self.student_id, concept, correctness, depth
                 )
@@ -344,15 +474,20 @@ class StudentState(BaseModel):
         if self.session_doubt_counts:
             async with get_conn() as conn:
                 for concept, count in self.session_doubt_counts.items():
-                    await conn.execute(
-                        """
-                        INSERT INTO doubt_log
-                          (student_id, session_id, concept, count, doubt_type)
-                        VALUES ($1, $2, $3, $4, 'general')
-                        ON CONFLICT DO NOTHING
-                        """,
-                        self.student_id, self.session_id, concept, count,
-                    )
+                    type_counts = self.session_doubt_types.get(concept) or {"general": count}
+                    for doubt_type, type_count in type_counts.items():
+                        await conn.execute(
+                            """
+                            INSERT INTO doubt_log
+                              (student_id, session_id, concept, count, doubt_type)
+                            VALUES ($1, $2, $3, $4, $5)
+                            """,
+                            self.student_id,
+                            self.session_id,
+                            concept,
+                            type_count,
+                            doubt_type,
+                        )
 
         # Curriculum current_index
         if self.curriculum is not None and "curriculum" in self._dirty:
@@ -387,6 +522,22 @@ class StudentState(BaseModel):
                 self.curriculum.current_index
             ].concept
 
+        # Mastery breadth — how many concepts the student has solidly learned
+        mastered_count = sum(1 for m in self.concept_mastery.values() if m >= 0.7)
+        partial_count = sum(
+            1 for m in self.concept_mastery.values() if 0.3 <= m < 0.7
+        )
+        mastered_concepts = [c for c, m in self.concept_mastery.items() if m >= 0.7]
+
+        # Prior curriculum summary — helps architect size new courses correctly
+        prior_topic = ""
+        prior_modules_total = 0
+        prior_modules_done = 0
+        if self.curriculum:
+            prior_topic = self.curriculum.topic
+            prior_modules_total = len(self.curriculum.modules)
+            prior_modules_done = self.curriculum.current_index
+
         return (
             f"Student: {self.name or self.student_id}\n"
             f"Domain: {self.domain} | Goal: {self.goal} | Pace: {self.pace}\n"
@@ -401,4 +552,14 @@ class StudentState(BaseModel):
             f"Depth concern: {meta.depth_concern_flag}\n"
             f"Session doubts: {dict(self.session_doubt_counts)}\n"
             f"Eval cycle: {self.evaluation_cycle_count}\n"
+            f"\n--- KNOWLEDGE PROFILE ---\n"
+            f"Total concepts mastered (>=0.7): {mastered_count}\n"
+            f"Partial concepts (0.3-0.7): {partial_count}\n"
+            f"Mastered concepts: {', '.join(mastered_concepts) if mastered_concepts else 'none'}\n"
+            f"\n--- COURSE HISTORY ---\n"
+            f"Previous curriculum topic: {prior_topic if prior_topic else 'none (first course)'}\n"
+            f"Previous course size: {prior_modules_total} modules total, "
+            f"{prior_modules_done} completed\n"
+            f"Student experience level: "
+            f"{'expert' if mastered_count >= 10 else 'intermediate' if mastered_count >= 4 else 'beginner'}\n"
         )

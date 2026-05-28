@@ -9,18 +9,20 @@ Phase 4 — BaseAgent verification:
 Run: pytest tests/test_phase4.py -v -s
 """
 
-from core.student_model import StudentState
-from agents.base_agent import BaseAgent
-import pytest
-from dotenv import load_dotenv
-import sys
-import os
+import json
+import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from dotenv import load_dotenv
 load_dotenv()
 
+import pytest
+from unittest.mock import AsyncMock, patch
+from agents.base_agent import BaseAgent
+from core.student_model import StudentState
 
-# ── Toy subclass ────────────────────────────────────────────────────────
+
+# ── Toy subclass ──────────────────────────────────────────────────────────────
 
 class GreeterAgent(BaseAgent):
     NAME = "greeter_agent"
@@ -42,19 +44,19 @@ class GreeterAgent(BaseAgent):
                 description="Conclude the greeting session. Call this after greeting.",
                 properties={
                     "greeting": {"type": "string", "description": "The final greeting message"},
-                    "ready": {"type": "boolean", "description": "Is the student ready?"},
+                    "ready":    {"type": "boolean", "description": "Is the student ready?"},
                 },
                 required=["greeting", "ready"],
             ),
         ]
 
-    def _execute_tool(self, tool_name: str, args: dict) -> str:
+    async def _execute_tool(self, tool_name: str, args: dict) -> str:
         if tool_name == "get_student_name":
             return f"Student name: {self.state.name or 'Arjun'}"
         return "done"
 
-    def run_greeting(self) -> dict:
-        return self.run(
+    async def run_greeting(self) -> dict:
+        return await self.run(
             system=(
                 "You are a friendly session starter. "
                 "First call get_student_name to retrieve the student's name. "
@@ -64,7 +66,7 @@ class GreeterAgent(BaseAgent):
         )
 
 
-# ── Fixtures ────────────────────────────────────────────────────────────
+# ── Fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture
 def student():
@@ -77,7 +79,7 @@ def student():
     )
 
 
-# ── Tests ───────────────────────────────────────────────────────────────
+# ── Tests ─────────────────────────────────────────────────────────────────────
 
 def test_build_tool_structure():
     """build_tool() must produce a valid Groq tool spec."""
@@ -99,10 +101,13 @@ def test_build_tool_structure():
     print("\n✅ build_tool() produces valid Groq spec")
 
 
-def test_greeter_agent_runs(student):
+@pytest.mark.asyncio
+async def test_greeter_agent_runs(student):
     """GreeterAgent should call get_student_name then conclude (terminal)."""
     agent = GreeterAgent(student)
-    result = agent.run_greeting()
+    expected = {"greeting": "Hello, Arjun!", "ready": True}
+    with patch("agents.base_agent.tool_call_loop", AsyncMock(return_value=expected)):
+        result = await agent.run_greeting()
 
     print(f"\n✅ GreeterAgent result: {result}")
     assert "greeting" in result, f"Expected 'greeting' in result, got: {result}"

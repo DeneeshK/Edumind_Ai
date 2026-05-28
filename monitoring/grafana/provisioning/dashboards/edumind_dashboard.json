@@ -1,0 +1,210 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": { "list": [] },
+  "description": "EduMind platform monitoring — HTTP, LLM, courses, lessons, evaluations.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+
+    { "type": "row", "title": "🌐 HTTP Traffic", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 }, "id": 1, "collapsed": false },
+
+    {
+      "id": 2, "type": "timeseries", "title": "Requests per second",
+      "gridPos": { "x": 0, "y": 1, "w": 12, "h": 7 },
+      "targets": [{ "expr": "sum(rate(edumind_http_requests_total[1m])) by (endpoint)", "legendFormat": "{{endpoint}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } }
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "HTTP Error Rate (4xx + 5xx)",
+      "gridPos": { "x": 12, "y": 1, "w": 12, "h": 7 },
+      "targets": [{ "expr": "sum(rate(edumind_http_requests_total{status=~\"4..|5..\"}[1m])) by (endpoint,status)", "legendFormat": "{{status}} {{endpoint}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps", "color": { "mode": "fixed", "fixedColor": "red" } } }
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "P95 HTTP Latency by endpoint",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 7 },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(edumind_http_request_duration_seconds_bucket[5m])) by (le, endpoint))", "legendFormat": "p95 {{endpoint}}" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 5, "type": "stat", "title": "Total Requests (last 1h)",
+      "gridPos": { "x": 12, "y": 8, "w": 6, "h": 7 },
+      "targets": [{ "expr": "sum(increase(edumind_http_requests_total[1h]))" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "value": 0, "color": "green" }] } } }
+    },
+    {
+      "id": 6, "type": "stat", "title": "Error % (last 1h)",
+      "gridPos": { "x": 18, "y": 8, "w": 6, "h": 7 },
+      "targets": [{ "expr": "100 * sum(increase(edumind_http_requests_total{status=~\"4..|5..\"}[1h])) / sum(increase(edumind_http_requests_total[1h]))" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 2, "color": "yellow" }, { "value": 5, "color": "red" }] } } }
+    },
+
+    { "type": "row", "title": "🤖 LLM (Groq) Health", "gridPos": { "x": 0, "y": 15, "w": 24, "h": 1 }, "id": 10, "collapsed": false },
+
+    {
+      "id": 11, "type": "timeseries", "title": "LLM Calls per minute by model",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 7 },
+      "targets": [{ "expr": "sum(rate(edumind_llm_requests_total[1m])) by (model)", "legendFormat": "{{model}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 12, "type": "timeseries", "title": "LLM Errors by type",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 7 },
+      "targets": [{ "expr": "sum(rate(edumind_llm_errors_total[1m])) by (model, error_type)", "legendFormat": "{{model}} — {{error_type}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps", "color": { "mode": "fixed", "fixedColor": "red" } } }
+    },
+    {
+      "id": 13, "type": "timeseries", "title": "LLM P50 / P95 / P99 Latency",
+      "gridPos": { "x": 0, "y": 23, "w": 16, "h": 7 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(edumind_llm_duration_seconds_bucket[5m])) by (le, model))", "legendFormat": "p50 {{model}}" },
+        { "expr": "histogram_quantile(0.95, sum(rate(edumind_llm_duration_seconds_bucket[5m])) by (le, model))", "legendFormat": "p95 {{model}}" },
+        { "expr": "histogram_quantile(0.99, sum(rate(edumind_llm_duration_seconds_bucket[5m])) by (le, model))", "legendFormat": "p99 {{model}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 14, "type": "stat", "title": "Rate-limit retries (1h)",
+      "gridPos": { "x": 16, "y": 23, "w": 8, "h": 7 },
+      "targets": [{ "expr": "sum(increase(edumind_llm_retries_total[1h]))" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 5, "color": "yellow" }, { "value": 20, "color": "red" }] } } }
+    },
+
+    { "type": "row", "title": "📚 Course & Curriculum", "gridPos": { "x": 0, "y": 30, "w": 24, "h": 1 }, "id": 20, "collapsed": false },
+
+    {
+      "id": 21, "type": "stat", "title": "Courses created (24h)",
+      "gridPos": { "x": 0, "y": 31, "w": 6, "h": 5 },
+      "targets": [{ "expr": "sum(increase(edumind_courses_created_total[24h]))" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "value": 0, "color": "green" }] } } }
+    },
+    {
+      "id": 22, "type": "stat", "title": "Course failures (24h)",
+      "gridPos": { "x": 6, "y": 31, "w": 6, "h": 5 },
+      "targets": [{ "expr": "sum(increase(edumind_course_creation_failures_total[24h]))" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 1, "color": "yellow" }, { "value": 5, "color": "red" }] } } }
+    },
+    {
+      "id": 23, "type": "stat", "title": "Active course creations right now",
+      "gridPos": { "x": 12, "y": 31, "w": 6, "h": 5 },
+      "targets": [{ "expr": "edumind_active_course_creations" }],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 24, "type": "stat", "title": "Fallback roadmap used (24h)",
+      "gridPos": { "x": 18, "y": 31, "w": 6, "h": 5 },
+      "targets": [{ "expr": "sum(increase(edumind_roadmap_fallback_total[24h]))" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 1, "color": "yellow" }, { "value": 5, "color": "red" }] } } }
+    },
+    {
+      "id": 25, "type": "piechart", "title": "Courses by topic category",
+      "gridPos": { "x": 0, "y": 36, "w": 8, "h": 8 },
+      "targets": [{ "expr": "sum(increase(edumind_courses_created_total[7d])) by (topic_category)", "legendFormat": "{{topic_category}}" }]
+    },
+    {
+      "id": 26, "type": "timeseries", "title": "Course creation failures by reason",
+      "gridPos": { "x": 8, "y": 36, "w": 16, "h": 8 },
+      "targets": [{ "expr": "sum(rate(edumind_course_creation_failures_total[10m])) by (reason)", "legendFormat": "{{reason}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+
+    { "type": "row", "title": "📖 Lesson Generation", "gridPos": { "x": 0, "y": 44, "w": 24, "h": 1 }, "id": 30, "collapsed": false },
+
+    {
+      "id": 31, "type": "timeseries", "title": "Lessons generated per minute",
+      "gridPos": { "x": 0, "y": 45, "w": 12, "h": 7 },
+      "targets": [{ "expr": "sum(rate(edumind_lessons_generated_total[2m])) by (pace)", "legendFormat": "{{pace}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 32, "type": "timeseries", "title": "Lesson generation P95 latency by pace",
+      "gridPos": { "x": 12, "y": 45, "w": 12, "h": 7 },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(edumind_lesson_generation_duration_seconds_bucket[5m])) by (le, pace))", "legendFormat": "p95 {{pace}}" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 33, "type": "stat", "title": "Lesson errors (1h)",
+      "gridPos": { "x": 0, "y": 52, "w": 8, "h": 5 },
+      "targets": [{ "expr": "sum(increase(edumind_lesson_generation_errors_total[1h]))" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "value": 0, "color": "green" }, { "value": 1, "color": "yellow" }, { "value": 5, "color": "red" }] } } }
+    },
+    {
+      "id": 34, "type": "piechart", "title": "Lessons by pace",
+      "gridPos": { "x": 8, "y": 52, "w": 8, "h": 8 },
+      "targets": [{ "expr": "sum(increase(edumind_lessons_generated_total[7d])) by (pace)", "legendFormat": "{{pace}}" }]
+    },
+
+    { "type": "row", "title": "🧪 Evaluation / Quiz", "gridPos": { "x": 0, "y": 60, "w": 24, "h": 1 }, "id": 40, "collapsed": false },
+
+    {
+      "id": 41, "type": "stat", "title": "Eval sessions started (24h)",
+      "gridPos": { "x": 0, "y": 61, "w": 6, "h": 5 },
+      "targets": [{ "expr": "sum(increase(edumind_eval_sessions_started_total[24h]))" }],
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "value": 0, "color": "green" }] } } }
+    },
+    {
+      "id": 42, "type": "stat", "title": "Eval sessions completed (24h)",
+      "gridPos": { "x": 6, "y": 61, "w": 6, "h": 5 },
+      "targets": [{ "expr": "sum(increase(edumind_eval_sessions_completed_total[24h]))" }],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 43, "type": "stat", "title": "Probes triggered (24h)",
+      "gridPos": { "x": 12, "y": 61, "w": 6, "h": 5 },
+      "targets": [{ "expr": "sum(increase(edumind_eval_probe_triggered_total[24h]))" }],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 44, "type": "stat", "title": "Avg mastery score (last 1h)",
+      "gridPos": { "x": 18, "y": 61, "w": 6, "h": 5 },
+      "targets": [{ "expr": "histogram_quantile(0.50, sum(rate(edumind_eval_mastery_score_bucket[1h])) by (le))" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "value": 0, "color": "red" }, { "value": 0.6, "color": "yellow" }, { "value": 0.8, "color": "green" }] } } }
+    },
+    {
+      "id": 45, "type": "timeseries", "title": "Questions asked per minute by type",
+      "gridPos": { "x": 0, "y": 66, "w": 12, "h": 7 },
+      "targets": [{ "expr": "sum(rate(edumind_eval_questions_asked_total[2m])) by (question_type)", "legendFormat": "{{question_type}}" }]
+    },
+    {
+      "id": 46, "type": "heatmap", "title": "Mastery score distribution",
+      "gridPos": { "x": 12, "y": 66, "w": 12, "h": 7 },
+      "targets": [{ "expr": "sum(rate(edumind_eval_mastery_score_bucket[10m])) by (le)", "legendFormat": "{{le}}", "format": "heatmap" }]
+    },
+
+    { "type": "row", "title": "🔧 System Resources", "gridPos": { "x": 0, "y": 73, "w": 24, "h": 1 }, "id": 50, "collapsed": false },
+
+    {
+      "id": 51, "type": "timeseries", "title": "Process memory RSS",
+      "gridPos": { "x": 0, "y": 74, "w": 8, "h": 7 },
+      "targets": [{ "expr": "process_resident_memory_bytes", "legendFormat": "RSS bytes" }],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "id": 52, "type": "timeseries", "title": "Open file descriptors",
+      "gridPos": { "x": 8, "y": 74, "w": 8, "h": 7 },
+      "targets": [{ "expr": "process_open_fds", "legendFormat": "open FDs" }],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 53, "type": "timeseries", "title": "Active students (gauge)",
+      "gridPos": { "x": 16, "y": 74, "w": 8, "h": 7 },
+      "targets": [{ "expr": "edumind_active_students", "legendFormat": "active" }],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    }
+
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["edumind"],
+  "templating": { "list": [] },
+  "time": { "from": "now-3h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "EduMind Platform",
+  "uid": "edumind-main",
+  "version": 1
+}

@@ -1,0 +1,112 @@
+{
+  "session_id": "offline-demo-session",
+  "student_id": "demo-student",
+  "course_id": "demo-course",
+  "topic": "Python for beginners",
+  "domain": "programming",
+  "student_pace": "medium",
+  "rag": {
+    "original_query": "for loops in Python",
+    "hyde_answer": "A for loop in Python repeats a block of code for each item in a sequence such as a list or string.",
+    "ground_truth_concept_card": "For loops in Python are used to iterate over sequences and execute indented code for each item.",
+    "chromadb_chunks": [
+      "A Python for loop iterates over each item in a sequence.",
+      "The loop variable takes one value at a time from the iterable.",
+      "Indentation defines the body of the loop."
+    ],
+    "tavily_results": [
+      {
+        "title": "Python For Loops",
+        "url": "https://example.com/python-for-loops",
+        "content": "Python for loops are used for iterating over lists, strings, ranges, and other iterables.",
+        "published_date": "2025-01-10"
+      }
+    ],
+    "chunks_before_rerank": [
+      "Python variables store values.",
+      "A Python for loop iterates through items in a sequence.",
+      "Python functions organize reusable code."
+    ],
+    "chunks_after_rerank": [
+      "A Python for loop iterates through items in a sequence.",
+      "The loop variable changes on each iteration.",
+      "Indentation defines the loop body."
+    ],
+    "lesson_text": "A for loop lets Python repeat work for every item in a sequence. For example, for fruit in fruits: print(fruit) prints each fruit one by one."
+  },
+  "curriculum": {
+    "modules": [
+      {
+        "title": "Running Your First Python Program",
+        "concept": "Running Python code",
+        "prerequisites": []
+      },
+      {
+        "title": "Variables and Data Types",
+        "concept": "Variables",
+        "prerequisites": [
+          "Running Python code"
+        ]
+      },
+      {
+        "title": "For Loops",
+        "concept": "For loops",
+        "prerequisites": [
+          "Variables"
+        ]
+      }
+    ]
+  },
+  "lesson": {
+    "module": {
+      "title": "For Loops",
+      "concept": "For loops",
+      "depth_level": "standard",
+      "estimated_minutes": 30
+    },
+    "lesson_text": "A for loop lets Python repeat work for every item in a sequence. Example: fruits = ['apple','banana']; for fruit in fruits: print(fruit). Python prints each item one by one."
+  },
+  "evaluator": {
+    "questions": [
+      {
+        "question": "What does a for loop do in Python?",
+        "question_type": "conceptual",
+        "source_quote": "A for loop lets Python repeat work for every item in a sequence."
+      }
+    ],
+    "qa_log": [
+      {
+        "question": "What does a for loop do in Python?",
+        "answer": "It repeats code for each item in a list or sequence.",
+        "correctness_score": 0.9
+      }
+    ]
+  },
+  "adaptation": {
+    "mastery_score": 0.78,
+    "advance_threshold": 0.72,
+    "actual_action": "MOVE_FORWARD",
+    "misconception_type": null,
+    "reteach_count": 0
+  },
+  "learning_outcomes": {
+    "mastery_history": [
+      0.35,
+      0.62,
+      0.82
+    ],
+    "calibration_deltas": [
+      0.1,
+      -0.05,
+      0.02
+    ],
+    "session_summary": {
+      "modules_attempted": 3,
+      "modules_mastered": 2,
+      "total_modules_in_curriculum": 10,
+      "reteach_events": 1,
+      "session_duration_minutes": 80,
+      "pace": "medium"
+    }
+  }
+}

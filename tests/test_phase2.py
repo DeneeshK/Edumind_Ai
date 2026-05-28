@@ -6,18 +6,21 @@ tests/test_phase2.py
 Run: pytest tests/test_phase2.py -v -s
 """
 
-from clients import tavily_client
-from clients.groq_client import tool_call_loop, generate, stream
-import pytest
-from dotenv import load_dotenv
-import sys
-import os
+import json
+import sys, os
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from dotenv import load_dotenv
 load_dotenv()
 
+import pytest
+from clients.groq_client import tool_call_loop, generate, stream
+from clients import tavily_client
 
-# ── Toy tool definitions ────────────────────────────────────────────────
+
+# ── Toy tool definitions ──────────────────────────────────────────────────────
 
 GREET_TOOL = {
     "type": "function",
@@ -52,13 +55,36 @@ CONCLUDE_TOOL = {
 }
 
 
-def toy_executor(tool_name: str, args: dict) -> str:
+def toy_executor(tool_name: str, args_input: dict | str) -> str:
+    args = args_input if isinstance(args_input, dict) else json.loads(args_input)
     if tool_name == "greet_student":
         return f"Greeted {args['name']} successfully."
     return "done"
 
 
-# ── Tests ───────────────────────────────────────────────────────────────
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+def _tool_response(tool_name: str, arguments: dict, call_id: str = "call_1"):
+    tool_call = SimpleNamespace(
+        id=call_id,
+        function=SimpleNamespace(
+            name=tool_name,
+            arguments=json.dumps(arguments),
+        ),
+    )
+    message = SimpleNamespace(content="", tool_calls=[tool_call])
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+def _text_response(text: str):
+    message = SimpleNamespace(content=text, tool_calls=None)
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+def _stream_chunk(text: str):
+    delta = SimpleNamespace(content=text)
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+
 
 @pytest.mark.asyncio
 async def test_tool_call_loop_calls_terminal_tool():
@@ -66,18 +92,32 @@ async def test_tool_call_loop_calls_terminal_tool():
     LLM should: call greet_student → then call conclude_session (terminal).
     We verify the terminal result contains expected keys.
     """
-    result = await tool_call_loop(
-        system=(
-            "You are a session starter. "
-            "First call greet_student to greet the student. "
-            "Then call conclude_session with a summary. "
-            "Always call both tools in this order."
+    fake_llm = AsyncMock(side_effect=[
+        _tool_response(
+            "greet_student",
+            {"name": "Arjun", "message": "Welcome, Arjun"},
+            "call_greet",
         ),
-        user_message="Start a session for student named Arjun.",
-        tools=[GREET_TOOL, CONCLUDE_TOOL],
-        terminal_tool_name="conclude_session",
-        tool_executor=toy_executor,
-    )
+        _tool_response(
+            "conclude_session",
+            {"summary": "Arjun was greeted.", "ready": True},
+            "call_done",
+        ),
+    ])
+
+    with patch("clients.groq_client._with_retry", fake_llm):
+        result = await tool_call_loop(
+            system=(
+                "You are a session starter. "
+                "First call greet_student to greet the student. "
+                "Then call conclude_session with a summary. "
+                "Always call both tools in this order."
+            ),
+            user_message="Start a session for student named Arjun.",
+            tools=[GREET_TOOL, CONCLUDE_TOOL],
+            terminal_tool_name="conclude_session",
+            tool_executor=toy_executor,
+        )
 
     print(f"\n✅ tool_call_loop result: {result}")
     assert "summary" in result, f"Expected 'summary' in result, got: {result}"
@@ -89,20 +129,35 @@ async def test_tool_call_loop_calls_terminal_tool():
 @pytest.mark.asyncio
 async def test_generate_returns_string():
     """generate() should return a non-empty string."""
-    result = await generate(
-        messages=[{"role": "user", "content": "Say hello in one word."}],
-    )
+    with patch("clients.groq_client._with_retry", AsyncMock(return_value=_text_response("hello"))):
+        result = await generate(
+            messages=[{"role": "user", "content": "Say hello in one word."}],
+        )
     print(f"\n✅ generate() returned: '{result}'")
     assert isinstance(result, str)
     assert len(result) > 0
 
 
-def test_stream_yields_chunks():
+@pytest.mark.asyncio
+async def test_stream_yields_chunks():
     """stream() should yield multiple string chunks."""
-    chunks = list(stream(
-        messages=[
-            {"role": "user", "content": "Count from 1 to 5, one number per word."}],
-    ))
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **kw: [
+                    _stream_chunk("one "),
+                    _stream_chunk("two "),
+                    _stream_chunk("three"),
+                ]
+            )
+        )
+    )
+    chunks = []
+    with patch("clients.groq_client.get_client", return_value=fake_client):
+        async for chunk in stream(
+            messages=[{"role": "user", "content": "Count from 1 to 5, one number per word."}],
+        ):
+            chunks.append(chunk)
     full = "".join(chunks)
     print(f"\n✅ stream() yielded {len(chunks)} chunks: '{full[:80]}'")
     assert len(chunks) > 0

@@ -6,16 +6,15 @@ Run: pytest tests/test_phase3.py -v -s
 NOTE: BGE-M3 downloads ~2GB on first run. This is a one-time download.
 """
 
-from core.rag_pipeline import hyde, retrieve
-from db.chromadb_client import insert, search, rerank, embed
-import pytest
-from dotenv import load_dotenv
-import sys
-import os
+import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from dotenv import load_dotenv
 load_dotenv()
 
+import pytest
+from db.chromadb_client import insert, search, rerank, embed
+from core.rag_pipeline import hyde, retrieve
 
 TEST_DOMAIN = "test_ml_domain"
 
@@ -38,26 +37,28 @@ CHUNKS = [
 ]
 
 
-def test_embed_returns_vector():
-    vec = embed("test sentence")
+@pytest.mark.asyncio
+async def test_embed_returns_vector():
+    vec = await embed("test sentence")
     assert isinstance(vec, list)
     assert len(vec) > 100   # BGE-M3 produces 1024-dim vectors
     assert isinstance(vec[0], float)
     print(f"\n✅ embed() returned {len(vec)}-dim vector")
 
 
-def test_insert_and_search():
+@pytest.mark.asyncio
+async def test_insert_and_search():
     """Insert 5 chunks, search for attention, verify relevant chunks returned."""
     # Insert all 5
     for chunk_id, text in CHUNKS:
-        insert(chunk_id, TEST_DOMAIN, text)
+        await insert(chunk_id, TEST_DOMAIN, text)
     print(f"\n✅ Inserted {len(CHUNKS)} chunks into ChromaDB")
 
     # Search
-    results = search("how does attention mechanism work", TEST_DOMAIN, top_k=3)
+    results = await search("how does attention mechanism work", TEST_DOMAIN, top_k=3)
     print(f"✅ Retrieved {len(results)} chunks")
     for i, r in enumerate(results):
-        print(f"   [{i + 1}] {r[:80]}...")
+        print(f"   [{i+1}] {r[:80]}...")
 
     assert len(results) > 0
     # At least one result should mention attention
@@ -66,15 +67,16 @@ def test_insert_and_search():
     print("✅ Relevant chunks contain 'attention'")
 
 
-def test_rerank_orders_by_relevance():
+@pytest.mark.asyncio
+async def test_rerank_orders_by_relevance():
     """Reranker should put attention chunks above unrelated ones."""
     all_texts = [text for _, text in CHUNKS]
     query = "explain self-attention in transformers"
-    reranked = rerank(query, all_texts, top_k=3)
+    reranked = await rerank(query, all_texts, top_k=3)
 
-    print("\n✅ Reranked top 3:")
+    print(f"\n✅ Reranked top 3:")
     for i, r in enumerate(reranked):
-        print(f"   [{i + 1}] {r[:80]}...")
+        print(f"   [{i+1}] {r[:80]}...")
 
     combined = " ".join(reranked).lower()
     assert "attention" in combined
@@ -101,7 +103,7 @@ async def test_full_rag_pipeline():
     )
     print(f"\n✅ RAG pipeline returned {len(results)} chunks")
     for i, r in enumerate(results):
-        print(f"   [{i + 1}] {r[:80]}...")
+        print(f"   [{i+1}] {r[:80]}...")
 
     assert len(results) > 0
     combined = " ".join(results).lower()

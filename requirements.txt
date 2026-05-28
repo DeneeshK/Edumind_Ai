@@ -1,0 +1,50 @@
+# EduMind backend dependencies
+#
+# Supported Python: 3.10-3.12
+#
+# This is intentionally a clean application requirements file, not a full
+# `pip freeze` dump. It pins the risky parts of the stack and avoids unrelated
+# GPU/training packages that commonly create resolver conflicts.
+
+# Web API
+fastapi==0.111.1
+uvicorn[standard]==0.30.6
+slowapi==0.1.9
+
+# Data validation and settings
+pydantic==2.7.4
+pydantic-settings==2.3.4
+
+# Database
+asyncpg==0.29.0
+
+# LLM and search clients
+groq==0.9.0
+tavily-python==0.3.9
+# Groq 0.9.0 still passes the legacy `proxies` argument internally; httpx
+# removed that keyword in 0.28, so keep this pinned until Groq is upgraded.
+httpx==0.27.2
+
+# Vector store and retrieval
+chromadb==0.5.23
+
+# Embeddings and reranking
+# The app loads BAAI/bge-m3 and BAAI/bge-reranker-large through
+# sentence-transformers. Keep transformers on the 4.x line unless you have
+# explicitly tested the 5.x stack.
+sentence-transformers==3.4.1
+transformers==4.46.3
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1+cpu
+numpy==1.26.4
+scipy==1.14.1
+scikit-learn==1.5.2
+
+# Scheduler, utilities, logging
+APScheduler==3.10.4
+python-dotenv==1.0.1
+loguru==0.7.2
+
+# Tests
+pytest==8.2.2
+pytest-asyncio==0.23.8

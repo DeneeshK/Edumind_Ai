@@ -95,7 +95,7 @@ class AdaptationEngine(BaseAgent):
                 required=["action", "reason"],
             ),
         ]
-    # ── Gap Analysis ────────────────────────────────────────────────────────
+    # ── Gap Analysis ──────────────────────────────────────────────────────────
 
     async def run_gap_analysis(self) -> str | None:
         """
@@ -148,16 +148,16 @@ ANALYSIS RULES:
    - action = "DETOUR"
    - missing_concept = the prerequisite the student is most likely missing
    - reason = one sentence explaining the pattern
-
+   
    OR if no clear prerequisite gap exists:
    - action = "RETEACH"
    - reason = "No single prerequisite gap identified; recommend style change"
 
 The missing_concept field is the KEY OUTPUT — it must be a specific, teachable
-concept name (e.g. "function closures", "Newton's Second Law", "gradient descent").
+concept name (e.g. "function closures", "matrix multiplication", "gradient descent").
 """
 
-        result = await self.arun(
+        result = await self.run(
             system=system,
             user_message=(
                 f"Gap analysis: student failed {len(weak)}/3 recent concepts.\n\n"
@@ -174,25 +174,19 @@ concept name (e.g. "function closures", "Newton's Second Law", "gradient descent
         if action == "DETOUR" and missing:
             self._log_decision(
                 action="GAP_DETECTED",
-                reason=result.get(
-                    "reason", f"Gap analysis found missing: {missing}"),
-                payload={
-                    "missing_concept": missing,
-                    "weak_concepts": weak_concepts},
+                reason=result.get("reason", f"Gap analysis found missing: {missing}"),
+                payload={"missing_concept": missing, "weak_concepts": weak_concepts},
             )
-            logger.info(
-                "Gap analysis found missing prerequisite: '{}'",
-                missing)
+            logger.info("Gap analysis found missing prerequisite: '{}'", missing)
             return missing
 
-        logger.info(
-            "Gap analysis: no clear prerequisite gap in {}",
-            weak_concepts)
+        logger.info("Gap analysis: no clear prerequisite gap in {}", weak_concepts)
         return None
 
-    # ── Tool executor ───────────────────────────────────────────────────────
 
-    def _execute_tool(self, tool_name: str, args: dict) -> str:
+    # ── Tool executor ─────────────────────────────────────────────────────────
+
+    async def _execute_tool(self, tool_name: str, args: dict) -> str:
         meta = self.state.metacognition
 
         if tool_name == "analyse_metacognition":
@@ -207,7 +201,7 @@ concept name (e.g. "function closures", "Newton's Second Law", "gradient descent
 
             if focus == "style":
                 scores_summary = {
-                    s: round(sum(v) / len(v), 2)
+                    s: round(sum(v)/len(v), 2)
                     for s, v in meta.style_depth_scores.items() if v
                 }
                 return (
@@ -228,7 +222,7 @@ concept name (e.g. "function closures", "Newton's Second Law", "gradient descent
                 return (
                     f"Consecutive reteach count: {meta.consecutive_reteach_count}. "
                     f"Depth concern flag: {meta.depth_concern_flag}. "
-                    f"If reteach >= 3, recommend ESCALATE."
+                    f"If reteach >= 2 and mastery remains below threshold, recommend ESCALATE."
                 )
 
             return "Unknown focus."
@@ -255,12 +249,120 @@ concept name (e.g. "function closures", "Newton's Second Law", "gradient descent
                     "\n".join(results) +
                     f"\n\nWeak prerequisites: {weak}. Consider DETOUR to: {weak[0]}"
                 )
-            return f"All prerequisites met for '{concept}':\n" + \
-                "\n".join(results)
+            return f"All prerequisites met for '{concept}':\n" + "\n".join(results)
 
-        return super()._execute_tool(tool_name, args)
+        return await super()._execute_tool(tool_name, args)
 
-    # ── Public run method ───────────────────────────────────────────────────
+    def _alternate_style(self) -> str:
+        order = ["formal", "analogy", "example_first", "visual", "story"]
+        current = self.state.metacognition.preferred_style
+        for style in order:
+            if style != current:
+                return style
+        return "example_first"
+
+    def _first_weak_prerequisite(self, concept: str) -> str | None:
+        module = self._current_module()
+        prereqs = module.prerequisites if module else []
+        for prereq in prereqs:
+            if self.state.get_mastery(prereq) < self.state.advance_threshold:
+                return prereq
+        return None
+
+    def _explicit_decision(
+        self,
+        report: EvaluationReport,
+        llm_result: dict | None = None,
+    ) -> tuple[str, str, str | None, str | None, dict]:
+        """
+        Apply the product rules directly. The LLM may provide missing_concept
+        wording, but it cannot override the score/threshold decision boundary.
+        """
+        llm_result = llm_result or {}
+        meta = self.state.metacognition
+        threshold = self.state.advance_threshold
+        mastery = report.mastery_score
+        misconception = report.misconception_type
+        style_for_reteach: str | None = None
+        missing_concept: str | None = None
+        updates: dict = {}
+
+        if report.recommended_action == "HOLD":
+            return (
+                "HOLD",
+                "Student requested a pause or stop, so the session should hold.",
+                None,
+                None,
+                {},
+            )
+
+        if report.recommended_action == "COMPRESS" and mastery >= 0.85:
+            return (
+                "COMPRESS",
+                f"Mastery {mastery:.2f} shows the student is clearly ahead of this module.",
+                None,
+                None,
+                {"consecutive_reteach_count": 0},
+            )
+
+        if mastery >= threshold and not misconception:
+            return (
+                "MOVE_FORWARD",
+                f"Mastery {mastery:.2f} cleared the {threshold:.2f} threshold with no misconception.",
+                None,
+                None,
+                {"consecutive_reteach_count": 0},
+            )
+
+        if mastery >= threshold and misconception:
+            return (
+                "MOVE_FORWARD_WITH_FLAG",
+                f"Mastery cleared threshold, but {misconception} needs targeted follow-up.",
+                None,
+                None,
+                {"consecutive_reteach_count": 0, "flagged_misconception": misconception},
+            )
+
+        if meta.consecutive_reteach_count >= 2 and mastery < threshold:
+            return (
+                "ESCALATE",
+                f"Mastery {mastery:.2f} is still below threshold after {meta.consecutive_reteach_count} reteach cycle(s).",
+                None,
+                None,
+                {"depth_concern_flag": True},
+            )
+
+        if mastery < 0.4 or report.recommended_action == "DETOUR":
+            missing_concept = (
+                self._first_weak_prerequisite(report.concept)
+                or llm_result.get("missing_concept")
+                or f"prerequisite for {report.concept}"
+            )
+            return (
+                "DETOUR",
+                f"Mastery {mastery:.2f} or the evaluator's report suggests a missing prerequisite before continuing.",
+                None,
+                missing_concept,
+                {"depth_concern_flag": True},
+            )
+
+        style_for_reteach = (
+            llm_result.get("style_for_reteach")
+            if llm_result.get("style_for_reteach") not in (None, "", "none")
+            else self._alternate_style()
+        )
+        updates = {"consecutive_reteach_count": meta.consecutive_reteach_count + 1}
+        if report.depth_score < 0.5:
+            updates["depth_concern_flag"] = True
+        return (
+            "RETEACH",
+            f"Mastery {mastery:.2f} is below the {threshold:.2f} threshold; reteach with a different style.",
+            style_for_reteach,
+            None,
+            updates,
+        )
+
+    # ── Public run method ─────────────────────────────────────────────────────
 
     async def decide(self, report: EvaluationReport) -> AdaptationDecision:
         """
@@ -274,7 +376,7 @@ concept name (e.g. "function closures", "Newton's Second Law", "gradient descent
         """
         meta = self.state.metacognition
         module = self._current_module()
-        module.concept if module else report.concept
+        concept = module.concept if module else report.concept
 
         system = f"""You are an adaptation engine for an adaptive learning system.
 Analyse the student's evaluation result and decide the optimal next action.
@@ -306,11 +408,11 @@ DECISION RULES:
 
 ACTION GUIDE:
 - MOVE_FORWARD: mastery >= {self.state.advance_threshold}
-- MOVE_FORWARD_WITH_FLAG: mastery >= {self.state.advance_threshold - 0.08} but depth weak
-- RETEACH: mastery < {self.state.advance_threshold}, reteach_count < 3 → pick DIFFERENT style
-- DETOUR: prerequisite gap → teach missing concept first
-- ESCALATE: reteach_count >= 3 → human intervention needed
-- COMPRESS: student is clearly ahead, skip to harder content
+- MOVE_FORWARD_WITH_FLAG: mastery >= {self.state.advance_threshold} with a non-blocking misconception flag
+- RETEACH: 0.4 <= mastery < {self.state.advance_threshold}, reteach_count < 2 → pick DIFFERENT style
+- DETOUR: mastery < 0.4 or prerequisite gap → teach missing concept first
+- ESCALATE: reteach_count >= 2 and mastery remains below threshold → rebuild the course sequence
+- COMPRESS: evaluator explicitly recommends compression and mastery >= 0.85
 - HOLD: student requested break
 
 METACOGNITION UPDATE RULES:
@@ -319,45 +421,40 @@ METACOGNITION UPDATE RULES:
 - depth_score < 0.5 for 2nd time → set depth_concern_flag=true
 """
 
-        result = await self.arun(
-            system=system,
-            user_message=(
-                f"Decide the next action after evaluating concept '{report.concept}'. "
-                f"Mastery={report.mastery_score:.2f}, threshold={self.state.advance_threshold}"
-            ),
-            model=settings.reasoning_model,
+        try:
+            result = await self.run(
+                system=system,
+                user_message=(
+                    f"Decide the next action after evaluating concept '{report.concept}'. "
+                    f"Mastery={report.mastery_score:.2f}, threshold={self.state.advance_threshold}"
+                ),
+                model=settings.reasoning_model,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Adaptation LLM failed for concept='{}': {}. Using explicit rules.",
+                report.concept, exc,
+            )
+            result = {}
+
+        action, reason, style_for_reteach, missing_concept, meta_updates = (
+            self._explicit_decision(report, result)
         )
 
-        action = result.get("action", "RETEACH")
-        reason = result.get("reason", "Adaptation engine decision")
-        style_for_reteach = result.get("style_for_reteach")
-        missing_concept = result.get("missing_concept")
-        meta_updates = result.get("metacognition_updates", {})
-
-        # ── Apply metacognition updates ──────────────────────────────────────
+        # ── Apply metacognition updates ───────────────────────────────────────
         if isinstance(meta_updates, dict):
             if "consecutive_reteach_count" in meta_updates:
-                meta.consecutive_reteach_count = int(
-                    meta_updates["consecutive_reteach_count"])
+                meta.consecutive_reteach_count = int(meta_updates["consecutive_reteach_count"])
             if "depth_concern_flag" in meta_updates:
-                meta.depth_concern_flag = bool(
-                    meta_updates["depth_concern_flag"])
-
-        # Safety override — if reteach count >= 3, force ESCALATE
-        if meta.consecutive_reteach_count >= 3 and action == "RETEACH":
-            action = "ESCALATE"
-            reason = f"Auto-escalated after {meta.consecutive_reteach_count} reteach cycles"
-            logger.warning(
-                "ESCALATE triggered after {} reteach cycles",
-                meta.consecutive_reteach_count)
+                meta.depth_concern_flag = bool(meta_updates["depth_concern_flag"])
+            self.state.mark_dirty("metacognition")
 
         decision = AdaptationDecision(
             action=action,
             reason=reason,
             style_for_reteach=style_for_reteach if style_for_reteach != "none" else None,
             missing_concept=missing_concept,
-            metacognition_updates=meta_updates if isinstance(
-                meta_updates, dict) else {},
+            metacognition_updates=meta_updates if isinstance(meta_updates, dict) else {},
         )
 
         self._log_decision(action, reason, decision.model_dump())

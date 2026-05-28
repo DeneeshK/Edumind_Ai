@@ -17,9 +17,9 @@ Every subclass must define:
 
 from __future__ import annotations
 
-import asyncio
-import inspect
 import json
+import time
+import functools
 from typing import Any
 
 from loguru import logger
@@ -27,6 +27,57 @@ from loguru import logger
 from clients.groq_client import tool_call_loop
 from core.student_model import StudentState
 from config import settings
+
+
+# ── Observability helpers ─────────────────────────────────────────────────────
+# Lightweight built-in tracing — no external dependency required.
+# Emits structured JSON trace records via loguru so they can be shipped to
+# any log aggregator (ELK, Datadog, Loki). Each agent run gets a trace_id
+# that groups all tool calls, token counts, and latencies in one record.
+
+def _trace_agent_run(run_fn):
+    """
+    Decorator for BaseAgent.run().
+    Records: agent name, student_id, wall-clock latency, tool call count,
+    approximate token usage (from response usage field when available).
+    Emits as a structured JSON log line at INFO level.
+    """
+    @functools.wraps(run_fn)
+    async def wrapper(self, system, user_message, context="", model=None):
+        import uuid
+        trace_id = str(uuid.uuid4())[:8]
+        t0 = time.perf_counter()
+        self._trace_id = trace_id
+        self._tool_calls_this_run: list[dict] = []
+
+        try:
+            result = await run_fn(self, system, user_message, context, model)
+        except Exception as exc:
+            elapsed = round(time.perf_counter() - t0, 3)
+            logger.opt(lazy=True).info(
+                "TRACE agent={agent} trace={trace} student={student} "
+                "status=error error={error} latency_s={lat}",
+                agent=lambda: self.NAME,
+                trace=lambda: trace_id,
+                student=lambda: self.state.student_id,
+                error=lambda: str(exc),
+                lat=lambda: elapsed,
+            )
+            raise
+
+        elapsed = round(time.perf_counter() - t0, 3)
+        logger.info(
+            "TRACE | agent={} trace={} student={} status=ok "
+            "tool_calls={} latency_s={} tools={}",
+            self.NAME,
+            trace_id,
+            self.state.student_id,
+            len(self._tool_calls_this_run),
+            elapsed,
+            [t["name"] for t in self._tool_calls_this_run],
+        )
+        return result
+    return wrapper
 
 
 class BaseAgent:
@@ -48,7 +99,7 @@ class BaseAgent:
     def __init__(self, state: StudentState):
         self.state = state
 
-    # ── Tool spec builder ───────────────────────────────────────────────────
+    # ── Tool spec builder ─────────────────────────────────────────────────────
 
     @staticmethod
     def build_tool(
@@ -90,9 +141,9 @@ class BaseAgent:
             },
         }
 
-    # ── Tool executor (override in subclass) ────────────────────────────────
+    # ── Tool executor (override in subclass) ──────────────────────────────────
 
-    def _execute_tool(self, tool_name: str, args: dict) -> Any:
+    async def _execute_tool(self, tool_name: str, args: dict) -> str:
         """
         Execute a non-terminal tool call and return a result string.
         Subclasses override this to implement tool logic.
@@ -104,40 +155,49 @@ class BaseAgent:
         Returns:
             str result fed back to the LLM as the tool response
         """
-        logger.warning(
-            "{}: unhandled tool '{}' — returning empty result",
-            self.NAME,
-            tool_name)
+        logger.warning("{}: unhandled tool '{}' — returning empty result", self.NAME, tool_name)
         return f"Tool '{tool_name}' not implemented in {self.NAME}."
 
-    async def _tool_executor_wrapper(
-            self, tool_name: str, args: dict | str | None) -> str:
-        """
-        Internal wrapper for tool_call_loop.
+    async def _tool_executor_wrapper(self, tool_name: str, args_input: dict | str | bytes | None) -> str:
+        """Internal wrapper that normalises tool args before _execute_tool().
 
-        groq_client.tool_call_loop already parses tool arguments into a dict.
-        Older CLI code passed a raw JSON string, so this accepts both shapes.
+        groq_client.tool_call_loop() now parses JSON arguments before calling
+        the executor. Older/direct callers may still pass a raw JSON string, so
+        keep this tolerant instead of assuming exactly one representation.
         """
-        if isinstance(args, dict):
-            parsed_args = args
-        elif isinstance(args, str):
-            try:
-                parsed_args = json.loads(args)
-                if not isinstance(parsed_args, dict):
-                    parsed_args = {"raw": args}
-            except json.JSONDecodeError:
-                parsed_args = {"raw": args}
+        if isinstance(args_input, dict):
+            args = args_input
+        elif args_input is None:
+            args = {}
         else:
-            parsed_args = {}
+            raw = args_input.decode() if isinstance(args_input, bytes) else str(args_input)
+            try:
+                parsed = json.loads(raw)
+                args = parsed if isinstance(parsed, dict) else {"raw": parsed}
+            except (json.JSONDecodeError, TypeError):
+                args = {"raw": raw}
 
-        result = self._execute_tool(tool_name, parsed_args)
-        if inspect.isawaitable(result):
-            result = await result
-        return str(result)
+        t0 = time.perf_counter()
+        result = await self._execute_tool(tool_name, args)
+        elapsed = round(time.perf_counter() - t0, 3)
 
-    # ── Core run loop ───────────────────────────────────────────────────────
+        # Record into trace
+        if hasattr(self, "_tool_calls_this_run"):
+            self._tool_calls_this_run.append({
+                "name": tool_name,
+                "latency_s": elapsed,
+                "result_len": len(result) if result else 0,
+            })
+        logger.debug(
+            "TOOL | agent={} tool={} latency_s={} result_len={}",
+            self.NAME, tool_name, elapsed, len(result) if result else 0,
+        )
+        return result
 
-    async def arun(
+    # ── Core run loop ─────────────────────────────────────────────────────────
+
+    @_trace_agent_run
+    async def run(
         self,
         system: str,
         user_message: str,
@@ -156,13 +216,23 @@ class BaseAgent:
         Returns:
             dict of terminal tool arguments
         """
-        logger.info(
-            "▶ {} starting (student={})",
-            self.NAME,
-            self.state.student_id)
+        logger.info("▶ {} starting (student={})", self.NAME, self.state.student_id)
+
+        # Prepend tool-format instruction to EVERY agent system prompt.
+        # This prevents models from using XML <function=...> format which
+        # Groq rejects with a 400 tool_use_failed error.
+        tool_format_instruction = (
+            "CRITICAL TOOL CALLING RULES:\n"
+            "- You MUST call tools using the structured JSON tool-call format ONLY.\n"
+            "- NEVER use XML tags like <function=tool_name> or <function_calls>.\n"
+            "- NEVER write function calls as plain text or code blocks.\n"
+            "- Use ONLY the tool definitions provided. Do not invent tool names.\n"
+            "- Always provide ALL required fields when calling a tool.\n\n"
+        )
+        full_system = tool_format_instruction + system
 
         result = await tool_call_loop(
-            system=system,
+            system=full_system,
             user_message=user_message,
             tools=self.TOOLS,
             context=context,
@@ -174,42 +244,19 @@ class BaseAgent:
         logger.info("◀ {} finished → keys={}", self.NAME, list(result.keys()))
         return result
 
-    def run(
-        self,
-        system: str,
-        user_message: str,
-        context: str = "",
-        model: str | None = None,
-    ) -> dict:
-        """
-        Synchronous compatibility wrapper for CLI/tests.
-
-        Async application paths should call arun() so the event loop is not
-        blocked or nested.
-        """
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(self.arun(system, user_message, context, model))
-
-        raise RuntimeError(
-            f"{self.NAME}.run() was called inside an active event loop. "
-            "Use `await agent.arun(...)` instead."
-        )
-
-    # ── Shared helpers ──────────────────────────────────────────────────────
+    # ── Shared helpers ────────────────────────────────────────────────────────
 
     def _student_context(self) -> str:
         """Return student context string for injection into system prompts."""
         return self.state.as_prompt_context()
 
-    def _log_decision(self, action: str, reason: str,
-                      payload: dict | None = None) -> None:
+    def _log_decision(self, action: str, reason: str, payload: dict | None = None) -> None:
         """Record a decision to state.session_decisions (flushed to DB at session end)."""
         from core.student_model import AdaptationDecision
         decision = AdaptationDecision(
             action=action,
             reason=reason,
+            agent=self.NAME,
             metacognition_updates=payload or {},
         )
         self.state.add_decision(decision)
