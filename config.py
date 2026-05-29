@@ -1,5 +1,28 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _parse_origin_list(value: str | list[str] | tuple[str, ...] | None) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        raw_items = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return []
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        raw_items = text.split(",")
+
+    origins: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        origin = str(item).strip().strip("\"'")
+        if origin and origin not in seen:
+            origins.append(origin)
+            seen.add(origin)
+    return origins
 
 
 class Settings(BaseSettings):
@@ -8,6 +31,9 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    # Runtime
+    environment: str = "development"
 
     # API Keys
     groq_api_key: str = Field(..., description="Groq API key")
@@ -18,6 +44,14 @@ class Settings(BaseSettings):
     )
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
     dev_auth_enabled: bool = True
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        origins = _parse_origin_list(self.cors_origins)
+        env = (self.environment or "").strip().lower()
+        if env in {"prod", "production"} and "*" in origins:
+            raise ValueError("CORS_ORIGINS cannot contain '*' when ENVIRONMENT=production")
+        return origins
 
     # Google OAuth + app session cookies
     google_client_id: str = ""

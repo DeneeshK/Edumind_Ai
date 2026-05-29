@@ -157,7 +157,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(PrometheusMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -420,9 +420,16 @@ async def prometheus_metrics():
 
 @app.get("/health")
 async def health():
+    """Lightweight liveness check for Docker, CI, and load balancers."""
+    return {"status": "ok"}
+
+
+@app.get("/ready")
+async def readiness():
     """
-    Health check for load balancers and container orchestrators.
-    Returns 200 if DB is reachable, 503 otherwise.
+    Readiness check for dependencies required to serve stateful requests.
+    This intentionally stays separate from /health so liveness does not depend
+    on Postgres, Groq, Tavily, or other external services.
     """
     try:
         from db.postgres import get_pool

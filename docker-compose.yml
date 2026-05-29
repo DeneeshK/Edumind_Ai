@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: edumind-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-edumind}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-edumind_password}
+      POSTGRES_DB: ${POSTGRES_DB:-edumind}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-edumind} -d ${POSTGRES_DB:-edumind}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: edumind-backend:local
+    container_name: edumind-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edumind}:${POSTGRES_PASSWORD:-edumind_password}@postgres:5432/${POSTGRES_DB:-edumind}
+      CHROMADB_PATH: ${CHROMADB_PATH:-/app/chromadb_data}
+      GROQ_API_KEY: ${GROQ_API_KEY:-replace-with-groq-key}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-replace-with-tavily-key}
+      EDUMIND_API_KEY: ${EDUMIND_API_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      DEV_AUTH_ENABLED: ${DEV_AUTH_ENABLED:-true}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/auth/google/callback}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-change-me-local-session-secret}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-edumind_session}
+      SESSION_MAX_AGE_SECONDS: ${SESSION_MAX_AGE_SECONDS:-604800}
+      EVAL_ENABLED: ${EVAL_ENABLED:-false}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - chromadb_data:/app/chromadb_data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  chromadb_data:

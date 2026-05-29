@@ -1,0 +1,15 @@
+{
+  "student_id": "student-test-1",
+  "name": "Test Student",
+  "domain": "software engineering",
+  "goal": "Learn Python fundamentals",
+  "pace": "medium",
+  "concept_mastery": {
+    "variables": 0.82,
+    "loops": 0.35
+  },
+  "concept_depth": {
+    "variables": 0.7,
+    "loops": 0.25
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "course_id": "course-python-1",
+  "title": "Python Fundamentals: Balanced Beginner Roadmap",
+  "roadmap_steps": [
+    "First, learn values and variables.",
+    "Then, learn loops and branching."
+  ],
+  "module_timeline": [
+    {
+      "module_id": "M1",
+      "module_number": 1,
+      "title": "Values and Variables",
+      "concept": "variables",
+      "recommended_next": true
+    },
+    {
+      "module_id": "M2",
+      "module_number": 2,
+      "title": "Control Flow",
+      "concept": "loops",
+      "recommended_next": false
+    }
+  ]
+}

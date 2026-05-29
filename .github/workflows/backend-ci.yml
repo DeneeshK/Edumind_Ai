@@ -1,0 +1,83 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+env:
+  ENVIRONMENT: test
+  DATABASE_URL: postgresql://test:test@localhost:5432/test_edumind
+  GROQ_API_KEY: test-groq-key
+  TAVILY_API_KEY: test-tavily-key
+  GOOGLE_CLIENT_ID: test-google-client-id
+  GOOGLE_CLIENT_SECRET: test-google-client-secret
+  GOOGLE_REDIRECT_URI: http://localhost:8000/auth/google/callback
+  FRONTEND_URL: http://localhost:5173
+  CORS_ORIGINS: http://localhost:5173,http://localhost:3000
+  SESSION_SECRET_KEY: test-session-secret
+  SESSION_COOKIE_NAME: edumind_test_session
+  SESSION_MAX_AGE_SECONDS: "604800"
+  EDUMIND_API_KEY: test-edumind-api-key
+  CHROMADB_PATH: /tmp/edumind-ci-chromadb
+  EVAL_ENABLED: "false"
+  DB_POOL_SIZE: "5"
+
+jobs:
+  backend-tests:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pytest
+        run: pytest -q
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build backend image
+        env:
+          DOCKER_BUILDKIT: "1"
+        run: docker build -t edumind-backend:ci .
+
+  compose-config:
+    name: Docker Compose Config
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Docker Compose version
+        run: docker compose version
+
+      - name: Validate Compose config
+        run: docker compose --env-file .env.example config -q

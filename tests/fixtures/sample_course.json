@@ -1,0 +1,35 @@
+{
+  "id": "course-python-1",
+  "student_id": "student-test-1",
+  "topic": "Python",
+  "goal": "Learn Python fundamentals",
+  "pace": "medium",
+  "title": "Python Fundamentals",
+  "personalization_profile": {
+    "topic": "Python",
+    "learning_goal": "Learn Python fundamentals",
+    "target_context": "general pure Python",
+    "learner_level": "complete beginner",
+    "pace": "medium",
+    "known_concepts": [],
+    "weak_concepts": ["loops"]
+  },
+  "modules": [
+    {
+      "id": "M1",
+      "module_index": 0,
+      "title": "Values and Variables",
+      "concept": "variables",
+      "estimated_minutes": 35,
+      "status": "not_started"
+    },
+    {
+      "id": "M2",
+      "module_index": 1,
+      "title": "Control Flow",
+      "concept": "loops",
+      "estimated_minutes": 45,
+      "status": "locked"
+    }
+  ]
+}
