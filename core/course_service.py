@@ -1351,9 +1351,48 @@ async def adaptation_context_for_module(
     adaptation_summary = await get_adaptation_summary(student_id, course_id) or {}
     doubt_summary = await get_compact_doubt_summary(course_id, module["id"], student_id)
 
+    # Build a rich doubt signal for the lesson generator.
+    # Doubts logged in chat during lesson consumption represent genuine confusion.
+    # We inject them so the lesson can pre-empt similar confusion.
+    doubt_messages = [m.get("content", "") for m in recent_doubts if m.get("content")]
+    doubt_concepts: list[str] = []
+    doubt_types: list[str] = []
+    if doubt_summary and isinstance(doubt_summary, dict):
+        doubt_concepts = list(doubt_summary.get("concepts", []))[:6]
+        doubt_types = list(doubt_summary.get("types", []))[:4]
+
+    # Build specific, actionable teaching adjustments from all signals
+    adjustments: list[str] = []
+    if weak:
+        adjustments.append(
+            f"Student has weak mastery of: {', '.join(weak[:5])}. "
+            "Add a short prerequisite bridge before introducing concepts that depend on these."
+        )
+    if doubt_concepts:
+        adjustments.append(
+            f"Student asked questions about: {', '.join(doubt_concepts)}. "
+            "Pre-emptively address these areas with clearer explanations and extra examples."
+        )
+    if doubt_types and "misconception" in doubt_types:
+        adjustments.append(
+            "Student has shown misconception-type doubts. "
+            "Add a 'Common mistakes' or 'Watch out for' section to this module."
+        )
+    if adaptation_summary.get("example_preference") == "more":
+        adjustments.append("Student prefers more worked examples — add at least 2 additional examples.")
+    if adaptation_summary.get("pace_adjustment") == "slower":
+        adjustments.append("Student finds the pace fast — break each concept into smaller steps.")
+    prev_weak = list(adaptation_summary.get("weak_concepts", []))[:5]
+    if prev_weak:
+        adjustments.append(
+            f"Previous evaluations flagged weakness in: {', '.join(prev_weak)}. "
+            "If this module builds on those concepts, add a 1-paragraph recap before proceeding."
+        )
+
     return {
         "current_module": module.get("title"),
-        "recent_doubts": recent_doubts,
+        "recent_doubt_messages": doubt_messages,
+        "doubt_concepts": doubt_concepts,
         "doubt_summary": doubt_summary,
         "weak_concepts": weak,
         "student_mastery": {
@@ -1362,15 +1401,7 @@ async def adaptation_context_for_module(
             if n.get("concept")
         },
         "adaptation_summary": adaptation_summary,
-        "recommended_teaching_adjustments": (
-            [
-                "Add a prerequisite bridge before the main example",
-                *(["Add more worked examples — student requested them"] if adaptation_summary.get("example_preference") == "more" else []),
-                *(["Slow down — student struggled with pace"] if adaptation_summary.get("pace_adjustment") == "slower" else []),
-            ]
-            if weak or adaptation_summary
-            else []
-        ),
+        "recommended_teaching_adjustments": adjustments,
     }
 
 
@@ -1525,9 +1556,14 @@ into lesson sections:
 
 Adaptation context:
 {json.dumps(adaptation_context, default=str)}
+
+ACTION REQUIRED — apply ALL teaching adjustments listed in recommended_teaching_adjustments.
+{chr(10).join(adaptation_context.get("recommended_teaching_adjustments") or []) or "No specific adjustments."}
 If adaptation_summary contains weak_concepts, add a brief recap of those before the main explanation.
 If adaptation_summary contains example_preference=more, include an extra worked example.
 If adaptation_summary contains pace_adjustment=slower, use smaller steps and more line-by-line explanation.
+If doubt_concepts is non-empty, pre-emptively address each of those concepts with extra clarity.
+If recent_doubt_messages is non-empty, those are questions the student actually asked — answer them inline within the relevant section of this lesson.
 
 Retrieved context:
 {chr(10).join(context_chunks[:4])}

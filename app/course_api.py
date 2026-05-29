@@ -89,6 +89,13 @@ SAFE_PROFILE_KEYS = {
     "expected_outcome",
     "course_constraints",
     "setup_source",
+    "known_concepts",
+    "weak_concepts",
+    "must_include",
+    "do_not_include",
+    "duration_value",
+    "duration_unit",
+    "hours_per_day",
 }
 
 
@@ -133,24 +140,39 @@ def _level_label(value: Any) -> str:
 
 
 def _time_commitment_text(
-    time_commitment: dict[str, Any] | None,
+    duration_value: int | None = None,
+    duration_unit: str | None = None,
+    hours_per_day: float | None = None,
+    time_commitment: dict[str, Any] | None = None,
     deadline: str | None = None,
 ) -> str:
-    commitment = time_commitment if isinstance(time_commitment, dict) else {}
-    value = _clean_text(commitment.get("value"))
-    unit = _clean_text(commitment.get("unit")).lower()
+    """
+    Build a plain-English time constraint string from structured time fields.
+    Examples: "3 weeks, 2 hours/day"  |  "10 days, 1.5 hours/day, target by 2026-06-15"
+    Legacy time_commitment dict handled for backward compat.
+    """
+    parts = []
+    if duration_value and duration_unit:
+        unit_label = {"days": "day", "weeks": "week", "months": "month"}.get(
+            str(duration_unit).lower(), str(duration_unit)
+        )
+        parts.append(f"{duration_value} {unit_label}{'s' if duration_value != 1 else ''}")
+    if hours_per_day:
+        h = float(hours_per_day)
+        label = f"{h:.0f}" if h == int(h) else f"{h}"
+        parts.append(f"{label} hour{'s' if h != 1 else ''}/day")
+    if not parts and isinstance(time_commitment, dict):
+        value = _clean_text(time_commitment.get("value"))
+        unit = _clean_text(time_commitment.get("unit")).lower()
+        if value:
+            if unit == "minutes_per_day":
+                parts.append(f"{value} minutes per day")
+            elif unit == "hours_per_week":
+                parts.append(f"{value} hours per week")
+            else:
+                parts.append(value)
+    text = ", ".join(parts)
     deadline_text = _clean_text(deadline)
-
-    if value:
-        if unit == "minutes_per_day":
-            text = f"{value} minutes per day"
-        elif unit == "hours_per_week":
-            text = f"{value} hours per week"
-        else:
-            text = value
-    else:
-        text = ""
-
     if deadline_text:
         text = f"{text}, target by {deadline_text}" if text else f"Target by {deadline_text}"
     return text
@@ -171,6 +193,11 @@ def course_payload_from_request(req: "CreateCourseRequest") -> dict[str, Any]:
     current_level = _clean_text(req.current_level or source.get("current_level") or "not_sure")
     learner_level = _level_label(current_level or source.get("learner_level"))
     prior_experience = _clean_text(req.prior_experience or source.get("prior_experience"))
+
+    # Structured time fields (new) + legacy dict compat
+    duration_value = req.duration_value or None
+    duration_unit = _clean_text(req.duration_unit or source.get("duration_unit")).lower() or None
+    hours_per_day = req.hours_per_day or None
     time_commitment = (
         req.time_commitment
         if isinstance(req.time_commitment, dict)
@@ -179,13 +206,42 @@ def course_payload_from_request(req: "CreateCourseRequest") -> dict[str, Any]:
         else {}
     )
     deadline = _clean_text(req.deadline or source.get("deadline"))
-    time_constraint = _time_commitment_text(time_commitment, deadline) or _clean_text(source.get("time_constraint"))
+    time_constraint = _time_commitment_text(
+        duration_value=duration_value,
+        duration_unit=duration_unit,
+        hours_per_day=hours_per_day,
+        time_commitment=time_commitment,
+        deadline=deadline,
+    ) or _clean_text(source.get("time_constraint"))
+
+    # Personalisation lists — merge request fields with profile source
+    known_concepts = list(dict.fromkeys(
+        list(getattr(req, "known_concepts", None) or [])
+        + list(source.get("known_concepts") or [])
+        + list(source.get("assumed_known_concepts") or [])
+    ))
+    weak_concepts = list(dict.fromkeys(
+        list(getattr(req, "weak_concepts", None) or [])
+        + list(source.get("weak_concepts") or [])
+    ))
+    must_include = list(dict.fromkeys(
+        list(getattr(req, "must_include", None) or [])
+        + list(source.get("must_include") or [])
+    ))
+    do_not_include = list(dict.fromkeys(
+        list(getattr(req, "do_not_include", None) or [])
+        + list(source.get("do_not_include") or [])
+    ))
 
     prior_parts = []
     if learner_level:
         prior_parts.append(f"Current level: {learner_level}.")
     if prior_experience:
         prior_parts.append(f"Prior experience: {prior_experience}.")
+    if known_concepts:
+        prior_parts.append(f"Already knows: {', '.join(known_concepts[:8])}.")
+    if weak_concepts:
+        prior_parts.append(f"Struggles with: {', '.join(weak_concepts[:8])}.")
     prior_knowledge = _clean_text(
         req.prior_knowledge
         or source.get("prior_knowledge_summary")
@@ -206,9 +262,16 @@ def course_payload_from_request(req: "CreateCourseRequest") -> dict[str, Any]:
         "depth_preference": source.get("depth_preference") or DEPTH_BY_PACE[pace],
         "time_constraint": time_constraint,
         "time_commitment": time_commitment,
+        "duration_value": duration_value,
+        "duration_unit": duration_unit,
+        "hours_per_day": hours_per_day,
         "deadline": deadline,
         "prior_experience": prior_experience,
         "prior_knowledge_summary": prior_knowledge,
+        "known_concepts": known_concepts,
+        "weak_concepts": weak_concepts,
+        "must_include": must_include,
+        "do_not_include": do_not_include,
         "expected_outcome": goal_description or explicit_goal or goal,
         "setup_source": "guided_course_setup",
     })
@@ -235,10 +298,21 @@ class CreateCourseRequest(BaseModel):
     goal_description: str | None = None
     current_level: str | None = None
     prior_experience: str = ""
-    time_commitment: dict[str, Any] | None = None
+    # Structured time commitment
+    # duration_value + duration_unit = total time available (e.g. 3 weeks)
+    # hours_per_day = daily study hours (e.g. 2.0)
+    duration_value: int | None = None
+    duration_unit: str | None = None           # "days" | "weeks" | "months"
+    hours_per_day: float | None = None
+    time_commitment: dict[str, Any] | None = None  # legacy compat
     deadline: str | None = None
     pace: str | None = "medium"
     prior_knowledge: str = ""
+    # Personalisation lists
+    known_concepts: list[str] = Field(default_factory=list)   # already mastered — skip
+    weak_concepts: list[str] = Field(default_factory=list)    # struggles with — reinforce
+    must_include: list[str] = Field(default_factory=list)     # must be in course
+    do_not_include: list[str] = Field(default_factory=list)   # absolute exclusions
     name: str = "Student"
     profile: dict[str, Any] | None = None
 
@@ -752,6 +826,51 @@ async def evaluation_latest(
         raise
     except Exception as exc:
         logger.exception("Evaluation latest fetch failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get(
+    "/courses/{course_id}/modules/{module_id}/evaluation/latest-full"
+)
+async def evaluation_latest_full(
+    course_id: str,
+    module_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    """
+    Get the FULL completed evaluation report for a module (most recent session).
+    Returns the complete final_report, feedback, and decision so the frontend
+    can re-render the progress report without it vanishing on module re-open.
+    Returns has_report=False if no completed evaluation exists yet.
+    """
+    try:
+        await _require_owned_module(course_id, module_id, current_user)
+        session = await get_latest_evaluation_session_for_student(
+            course_id,
+            module_id,
+            _current_student_id(current_user),
+        )
+        if not session or session.get("status") != "completed":
+            return {"session": None, "has_report": False}
+        return {
+            "has_report": True,
+            "session": {
+                "session_id": session["session_id"],
+                "status": session["status"],
+                "questions_asked": session.get("questions_asked", 0),
+                "decision": session.get("decision", ""),
+                "final_report": session.get("final_report_json") or {},
+                "motivational_feedback": session.get("motivational_feedback", ""),
+                "transition_feedback": session.get("transition_feedback", ""),
+                "reteach_data": session.get("reteach_data_json") or {},
+                "questions": session.get("questions_json") or [],
+                "answers": session.get("answers_json") or [],
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Evaluation latest-full fetch failed")
         raise HTTPException(status_code=500, detail=str(exc))
 
 
