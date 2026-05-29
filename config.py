@@ -42,7 +42,7 @@ class Settings(BaseSettings):
         default="",
         description="API key for EduMind API endpoints. Leave empty to disable auth (dev mode)."
     )
-    cors_origins: str = "http://localhost:5173,http://localhost:3000"
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000"
     dev_auth_enabled: bool = True
 
     @property

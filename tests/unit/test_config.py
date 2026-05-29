@@ -56,13 +56,14 @@ def test_cors_origins_are_parsed_from_comma_separated_env(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
     monkeypatch.setenv(
         "CORS_ORIGINS",
-        "http://localhost:5173, http://localhost:3000, https://edumind.ai",
+        "http://localhost:5173, http://127.0.0.1:5173, http://localhost:3000, https://edumind.ai",
     )
 
     settings = Settings(_env_file=None)
 
     assert settings.cors_origin_list == [
         "http://localhost:5173",
+        "http://127.0.0.1:5173",
         "http://localhost:3000",
         "https://edumind.ai",
     ]
