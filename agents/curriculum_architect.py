@@ -292,20 +292,41 @@ Apply this SAME level of granularity to any subject."""
         student_ctx = _build_student_context_block(topic, profile)
         pace = str(profile.get("pace") or self.state.pace or "medium").strip()
 
-        # Pace-aware splitting hint — injected into the sequencer so that
-        # "deep" pace actually produces more granular modules.
+        # Pace-aware grouping rules injected into the system prompt.
         pace_hint = {
-            "fast":   "Merge closely related small concepts into one module to keep pace brisk. "
-                      "Aim for fewer, denser modules. Skip supplementary concepts if needed.",
-            "medium": "Group concepts by natural thematic clusters. "
-                      "Each module should have one clear focus.",
-            "deep":   "Prefer SPLITTING concepts into their own module whenever a concept is "
-                      "non-trivial. A student on deep pace wants to spend dedicated time on each "
-                      "idea. Err on the side of more modules, not fewer.",
-        }.get(pace, "Group concepts by natural thematic clusters.")
+            "fast": (
+                "FAST PACE — Aggressively merge related small concepts into one module.\n"
+                "   - All operator types → one module: 'Python Operators'\n"
+                "   - All primitive types → one module: 'Python Data Types'\n"
+                "   - String indexing + slicing + methods → one module\n"
+                "   - All comprehensions → one module\n"
+                "   - All OOP except Classes+Objects can share 1-2 modules\n"
+                "   Target: 20-30 modules total for a full language curriculum."
+            ),
+            "medium": (
+                "MEDIUM PACE — Group by natural thematic cluster. Each module = one coherent topic.\n"
+                "   - Arithmetic + comparison + logical + assignment operators → ONE 'Operators' module\n"
+                "     (they are all operators, learned together, same lesson)\n"
+                "   - Membership + identity operators → can join the operators module\n"
+                "   - Primitive types (int, float, bool, None) → can be ONE 'Numeric & Boolean Types' module\n"
+                "   - String type + string basics → own module; string methods → own module\n"
+                "   - if/elif/else → own module; for/while loops → own module\n"
+                "   - Each data structure (list, tuple, dict, set) → own module\n"
+                "   - Each major OOP concept → own module\n"
+                "   Target: 30-45 modules total for a full language curriculum."
+            ),
+            "deep": (
+                "DEEP PACE — One concept per module. Maximum granularity.\n"
+                "   - Every operator TYPE gets its own module (arithmetic, comparison, logical, etc.)\n"
+                "   - Every data type gets its own module\n"
+                "   - Every OOP concept gets its own module\n"
+                "   - Err on the side of splitting, never merging\n"
+                "   Target: 50-70 modules total for a full language curriculum."
+            ),
+        }.get(pace, "Group concepts by natural thematic clusters. Each module = one coherent topic.")
 
         system = f"""You are EduMind's curriculum sequencer. You receive a flat concept list.
-Your job: arrange ALL concepts into an ordered module list where each module has a TIGHT FOCUS.
+Your job: arrange ALL concepts into an ordered module list following the PACE RULES below.
 
 Return STRICT JSON only. No markdown.
 
@@ -327,59 +348,51 @@ Return STRICT JSON only. No markdown.
   "confidence": 0.0
 }}
 
-PACE INSTRUCTION FOR THIS STUDENT: {pace_hint}
+━━━ PACE RULES (HIGHEST PRIORITY) ━━━
+{pace_hint}
 
-RULES — READ ALL CAREFULLY:
+━━━ UNIVERSAL RULES ━━━
 
 1. NEVER DROP CONCEPTS. Every concept in the input list must appear in concepts_taught
-   of exactly one module. Count them before submitting. confidence=0.0 if any are missing.
+   of exactly one module. Count before submitting. Set confidence=0.0 if any are missing.
 
-2. MODULE FOCUS — THIS IS THE MOST IMPORTANT RULE:
-   Each module must have a TIGHT, COHERENT focus. Ask: "Can I name this module with
-   one specific concept?" If not, it is too broad — split it.
+2. ORDER: strict prerequisite order. No concept appears before its dependencies.
+   Setup/install → types → operators → control flow → functions → data structures
+   → comprehensions → exceptions → files → modules → OOP → advanced topics → project.
 
-   CORRECT grouping (same mechanism, same lesson):
-   - "for loops" + "while loops" + "break/continue" → one module (all loop mechanics)
-   - "String Indexing" + "String Slicing" → one module (both are string access patterns)
-   - "List Methods" + "List Comprehensions" → one module (both are list operations)
+3. depth_level: based on concept complexity relative to student level.
+   "surface"=introductory, "standard"=core, "deep"=advanced. Never based on pace.
 
-   WRONG grouping (different concept families):
-   - Lists + Tuples + Dictionaries + Sets → WRONG, each is its own module
-   - Classes + Inheritance + Polymorphism → WRONG, each is its own module
-   - File Reading + File Writing → can share one module (same mechanism)
-   - Exception handling + Custom Exceptions + finally → one module (same mechanism)
+4. prerequisites[]: concept names from earlier modules only. Never module IDs.
 
-3. DATA STRUCTURES: every container type gets its OWN module. Never bundle them.
-   Lists → own module. Tuples → own module. Dictionaries → own module. Sets → own module.
+5. PERSONALISATION: If the student has weak concepts, give those modules more
+   estimated_minutes and depth_level="deep"."""
 
-4. OOP: every major OOP concept gets its OWN module. Never bundle them.
-   Classes and Objects → own module. Inheritance → own module.
-   Polymorphism → own module. Encapsulation → own module.
-
-5. ORDER: strict prerequisite order. No concept before its dependencies.
-
-6. depth_level: assign based on concept complexity relative to the student's level,
-   NOT based on pace. "surface"=introductory, "standard"=core concept, "deep"=advanced.
-
-7. prerequisites[]: concept names from earlier modules only, never module IDs.
-
-8. PERSONALISATION: The student context is provided. If the student has weak concepts,
-   ensure those modules have more estimated_minutes and depth_level="deep"."""
+        # Strip extra fields before sending — sequencer only needs concept names.
+        # Full dicts (cluster, importance, why_needed) add ~1,350 tokens of noise
+        # that gpt-oss-120b doesn't need and that caused the 413 token-limit errors.
+        slim_concepts = [
+            {"name": str(c.get("name") or c)} for c in concepts if c.get("name") or isinstance(c, str)
+        ]
 
         payload = {
             "student_context": student_ctx,
-            "concept_list_to_sequence": concepts,
+            "concept_list_to_sequence": slim_concepts,
             "instruction": "Arrange ALL concepts into ordered modules. Do not drop any concept.",
         }
         if repair_feedback:
             payload["repair_feedback"] = repair_feedback
 
+        # Use generation_model (llama-4-scout, 30K TPM) for sequencing.
+        # Sequencing is an ordering task, not deep reasoning — llama-4-scout
+        # handles it well and has 30K TPM vs gpt-oss-120b's 8K limit.
+        # gpt-oss-120b is reserved for coverage planning (the "what to teach" decision).
         raw = await generate(
             messages=[{"role": "user", "content": json.dumps(payload, default=str)}],
-            model=settings.reasoning_model,
+            model=settings.generation_model,
             system=system,
             json_mode=True,
-            max_tokens=5500,
+            max_tokens=6000,
         )
         data = parse_json_object(raw)
         modules = data.get("modules") or []
@@ -414,30 +427,33 @@ RULES — READ ALL CAREFULLY:
         """
         student_ctx = _build_student_context_block(topic, profile)
 
-        system = """You are EduMind's curriculum auditor.
+        system = """You are EduMind's curriculum auditor. You perform TWO checks:
 
-Your job: find concepts that are MISSING from the module list for this subject and goal.
-
-Process (do this mentally, do not output the intermediate steps):
-1. From your knowledge of this subject, think about every concept the student needs.
-2. Check each against the module list.
-3. Report ONLY the missing ones.
+CHECK 1 — COVERAGE: Find concepts genuinely missing from the module list.
+CHECK 2 — STRUCTURE: Find structural problems in the roadmap.
 
 Return STRICT JSON only.
 {
-  "concepts_missing_from_modules": ["missing concept 1", "missing concept 2", ...],
+  "concepts_missing_from_modules": ["missing concept 1", ...],
+  "structural_issues": ["issue description", ...],
   "coverage_verdict": "complete | minor_gaps | major_gaps",
   "verdict_reason": "one sentence"
 }
 
-Rules:
-- Only report concepts GENUINELY missing — not present in any module.
+CHECK 1 RULES:
+- Only report concepts GENUINELY missing — not present in any module's concepts_taught.
 - Do NOT report concepts in do_not_include — those are intentionally excluded.
-- Do NOT report concepts the student already knows (known_concepts) unless they are
-  strict prerequisites for what follows.
-- Report as many missing concepts as needed — do NOT cap the list artificially.
-  A few missing concepts → short list. A broken 1-module roadmap → full list.
-- If the module list is complete, return empty missing list and verdict "complete"."""
+- Do NOT report concepts the student already knows unless they are strict prerequisites.
+- Report as many missing concepts as needed — do NOT cap the list.
+- If complete, return empty list and verdict "complete".
+
+CHECK 2 RULES — flag these structural issues:
+- A module with 0 concepts_taught
+- OOP concepts (classes, inheritance, polymorphism, encapsulation) bundled into one module
+  when there are 4+ of them — each major OOP concept should be its own module on deep/medium pace
+- Prerequisites referencing concepts that appear LATER in the list (ordering violation)
+- Duplicate concept names across modules
+- If no structural issues found, return empty structural_issues list."""
 
         module_titles = [
             {
@@ -457,19 +473,25 @@ Rules:
         try:
             raw = await generate(
                 messages=[{"role": "user", "content": json.dumps(payload, default=str)}],
-                model="llama-3.3-70b-versatile",
+                # generation_model (llama-4-scout, 30K TPM) — auditing is a knowledge
+                # check + list comparison, not deep reasoning. Fast and high-capacity.
+                model=settings.generation_model,
                 system=system,
                 json_mode=True,
                 max_tokens=3000,
             )
             audit = parse_json_object(raw)
             missing = audit.get("concepts_missing_from_modules") or []
+            structural = audit.get("structural_issues") or []
             verdict = audit.get("coverage_verdict", "unknown")
             logger.info(
-                "Coverage audit: verdict={}, {} missing concepts.",
-                verdict, len(missing)
+                "Coverage audit: verdict={}, {} missing concepts, {} structural issues.",
+                verdict, len(missing), len(structural)
             )
-            return [str(m).strip() for m in missing if str(m).strip()], []
+            if structural:
+                for issue in structural[:5]:
+                    logger.warning("Roadmap structural issue: {}", issue)
+            return [str(m).strip() for m in missing if str(m).strip()], structural
         except Exception as exc:
             logger.warning("Coverage audit failed: {}. Proceeding with current modules.", exc)
             return [], []
@@ -485,9 +507,10 @@ Rules:
         modules: list[dict],
         concepts: list[dict],
         missing_concepts: list[str],
+        structural_issues: list[str] | None = None,
     ) -> tuple[list[dict], list[dict]]:
         """Add missing concepts to the concept list and re-sequence."""
-        if not missing_concepts:
+        if not missing_concepts and not structural_issues:
             return modules, concepts
 
         existing_names = {str(c.get("name") or "").lower() for c in concepts}
@@ -503,12 +526,18 @@ Rules:
                 existing_names.add(mc.lower())
                 logger.info("Gap fill: adding missing concept '{}'.", mc)
 
-        if len(new_concepts) == len(concepts):
+        repair_fb = ""
+        if structural_issues:
+            repair_fb = "Fix these structural issues: " + "; ".join(structural_issues[:5])
+
+        # If no new concepts were added AND no structural issues, nothing to do.
+        if len(new_concepts) == len(concepts) and not structural_issues:
             return modules, concepts
 
         try:
             new_modules, _, new_conf = await self._sequence_modules(
                 topic=topic, profile=profile, concepts=new_concepts,
+                repair_feedback=repair_fb,
             )
             is_collapse = (
                 len(new_modules) < max(3, len(modules) * 0.6) and new_conf < 0.5
@@ -918,26 +947,27 @@ Return STRICT JSON only: {"modules": [...], "repair_rationale": "..."}"""
         # ── Coverage audit ────────────────────────────────────────────────────
         if confidence >= 0.5 and raw_modules:
             try:
-                missing_concepts, _ = await self._audit_coverage(
+                missing_concepts, structural_issues = await self._audit_coverage(
                     topic=topic, profile=profile,
                     modules=raw_modules, concepts=concepts,
                 )
                 self._log_decision(
                     action="AUDIT_COVERAGE",
-                    reason=f"Auditor: {len(missing_concepts)} missing concepts found.",
-                    payload={"missing": missing_concepts[:5]},
+                    reason=f"Auditor: {len(missing_concepts)} missing concepts, {len(structural_issues)} structural issues.",
+                    payload={"missing": missing_concepts[:5], "structural": structural_issues[:3]},
                 )
 
                 # ── Gap fill ──────────────────────────────────────────────────
-                if missing_concepts:
+                if missing_concepts or structural_issues:
                     raw_modules, concepts = await self._fill_gaps(
                         topic=topic, profile=profile,
                         modules=raw_modules, concepts=concepts,
                         missing_concepts=missing_concepts,
+                        structural_issues=structural_issues,
                     )
                     self._log_decision(
                         action="FILL_GAPS",
-                        reason=f"Gap fill complete: {len(raw_modules)} modules after adding {len(missing_concepts)} concepts.",
+                        reason=f"Gap fill complete: {len(raw_modules)} modules after adding {len(missing_concepts)} concepts, fixing {len(structural_issues)} structural issues.",
                         payload={"final_module_count": len(raw_modules)},
                     )
             except (GroqRateLimitError, GroqTimeoutError):
