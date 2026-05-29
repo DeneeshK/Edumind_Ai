@@ -667,7 +667,7 @@ class SubmitAnswerRequest(BaseModel):
 async def evaluation_start(
     course_id: str,
     module_id: str,
-    req: StartEvaluationRequest,
+    req: StartEvaluationRequest | None = None,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
     """
