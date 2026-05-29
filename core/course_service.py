@@ -493,6 +493,26 @@ def _current_intent(
         }.get(current_level, current_level.replace("_", " "))
     if not learner_level and re.search(r"\b(no prior|no background|complete beginner|fresh student|beginner)\b", prior_summary, re.I):
         learner_level = "complete beginner"
+
+    # Build an enriched prior_knowledge_summary that combines every piece of
+    # prior-knowledge signal into one structured paragraph.  This is what gets
+    # injected verbatim into every LLM call — a richer paragraph means the
+    # model personalises the curriculum far more accurately.
+    known_concepts_raw = _clean_list(data.get("assumed_known_concepts") or data.get("known_concepts") or [])
+    weak_concepts_raw  = _clean_list(data.get("weak_concepts") or [])
+    pk_parts: list[str] = []
+    if learner_level and learner_level not in ("not sure", "not_sure"):
+        pk_parts.append(f"Learner level: {learner_level}.")
+    if prior_summary:
+        pk_parts.append(prior_summary)
+    if prior_experience and prior_experience.lower() not in prior_summary.lower():
+        pk_parts.append(f"Prior experience: {prior_experience}.")
+    if known_concepts_raw:
+        pk_parts.append(f"Already knows: {', '.join(known_concepts_raw[:10])}.")
+    if weak_concepts_raw:
+        pk_parts.append(f"Struggles with: {', '.join(weak_concepts_raw[:10])}.")
+    enriched_prior_summary = " ".join(pk_parts).strip() or prior_summary
+
     return {
         "topic": str(data.get("topic") or topic or exact_subject).strip(),
         "exact_subject": exact_subject or str(topic or "").strip(),
@@ -503,7 +523,7 @@ def _current_intent(
         "learner_level": learner_level,
         "pace": str(data.get("pace") or pace or "medium").strip(),
         "depth_preference": str(data.get("depth_preference") or "").strip(),
-        "prior_knowledge_summary": prior_summary,
+        "prior_knowledge_summary": enriched_prior_summary,
         "prior_experience": prior_experience,
         "time_constraint": str(data.get("time_constraint") or "").strip(),
         "time_commitment": data.get("time_commitment") or {},
@@ -573,7 +593,9 @@ def normalise_personalization_profile(
     data["time_commitment"] = intent["time_commitment"] or data.get("time_commitment") or {}
     data["deadline"] = intent["deadline"] or data.get("deadline")
     data["prior_experience"] = intent["prior_experience"] or data.get("prior_experience")
+    # Use the enriched summary built in _current_intent (includes level + known/weak concepts).
     data["prior_knowledge_summary"] = intent["prior_knowledge_summary"]
+    data["current_intent"]["prior_knowledge_summary"] = intent["prior_knowledge_summary"]
     declared_known = _trusted_declared_known(incoming, intent)
     data["assumed_known_concepts"] = declared_known
     data["known_concepts"] = list(declared_known)
