@@ -191,7 +191,7 @@ async def start_session(
     pace = course.get("pace", "medium")
     pace_cfg = _PACE_CONFIG.get(pace, _PACE_CONFIG["medium"])
     mod_ctx = _module_context(module)
-    doubt_summary = await get_compact_doubt_summary(course_id, module_id)
+    doubt_summary = await get_compact_doubt_summary(course_id, module_id, student_id)
     adaptation_summary = await get_adaptation_summary(student_id, course_id) or {}
     target_q = pace_cfg["base_q"]
 

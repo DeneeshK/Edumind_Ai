@@ -53,6 +53,7 @@ from db.postgres import (
     list_course_modules,
     list_courses,
     list_module_chat_history,
+    list_module_chat_history_for_student,
     record_doubt,
     record_module_chat_message,
     save_course_roadmap,
@@ -1343,12 +1344,12 @@ async def adaptation_context_for_module(
             not profile or n.get("concept") in relevant_history_concepts(profile, {"weak_concepts": [n]})["weak"]
         )
     ][:5]
-    history = await list_module_chat_history(course_id, module["id"])
+    history = await list_module_chat_history_for_student(course_id, module["id"], student_id)
     recent_doubts = [m for m in history if m.get("role") == "user"][-5:]
 
     # Pull in compact adaptation summary from previous evaluations
     adaptation_summary = await get_adaptation_summary(student_id, course_id) or {}
-    doubt_summary = await get_compact_doubt_summary(course_id, module["id"])
+    doubt_summary = await get_compact_doubt_summary(course_id, module["id"], student_id)
 
     return {
         "current_module": module.get("title"),
@@ -1877,7 +1878,7 @@ async def answer_module_chat(
         raise ValueError("Course or module not found")
 
     dtype, related, missing = classify_doubt(message, module)
-    history = await list_module_chat_history(course_id, module_id)
+    history = await list_module_chat_history_for_student(course_id, module_id, student_id)
     context = module.get("content_markdown") or ""
     if not context:
         raise ValueError("Generate the lesson before opening module chat.")

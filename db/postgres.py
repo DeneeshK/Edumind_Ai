@@ -820,6 +820,98 @@ async def upsert_dev_user(
     }
 
 
+async def upsert_google_user(
+    google_sub: str,
+    email: str,
+    name: str,
+    avatar_url: str = "",
+) -> dict[str, Any]:
+    """Create or update a user from a verified Google ID token."""
+    google_sub = (google_sub or "").strip()
+    email = (email or "").strip().lower()
+    name = (name or "EduMind Student").strip()
+    avatar_url = (avatar_url or "").strip()
+    if not google_sub:
+        raise ValueError("google_sub is required")
+    if not email:
+        raise ValueError("email is required")
+
+    async with get_conn() as conn:
+        existing = await conn.fetchrow(
+            "SELECT * FROM users WHERE google_sub=$1", google_sub
+        )
+        if not existing:
+            existing = await conn.fetchrow(
+                "SELECT * FROM users WHERE email=$1", email
+            )
+
+        if existing:
+            student_id = existing["student_id"]
+            await conn.execute(
+                """
+                UPDATE users
+                   SET google_sub=$2,
+                       email=$3,
+                       name=$4,
+                       avatar_url=$5,
+                       updated_at=NOW()
+                 WHERE id=$1
+                """,
+                existing["id"],
+                google_sub,
+                email,
+                name,
+                avatar_url,
+            )
+        else:
+            student_id = "google-" + uuid.uuid5(
+                uuid.NAMESPACE_URL, "edumind-google:" + google_sub
+            ).hex[:16]
+            await conn.execute(
+                """
+                INSERT INTO students (student_id, name)
+                VALUES ($1, $2)
+                ON CONFLICT (student_id) DO UPDATE
+                  SET name=$2, updated_at=NOW()
+                """,
+                student_id,
+                name,
+            )
+            await conn.execute(
+                """
+                INSERT INTO users
+                  (id, google_sub, email, name, avatar_url, student_id)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                """,
+                str(uuid.uuid4()),
+                google_sub,
+                email,
+                name,
+                avatar_url,
+                student_id,
+            )
+
+        await conn.execute(
+            """
+            INSERT INTO students (student_id, name)
+            VALUES ($1, $2)
+            ON CONFLICT (student_id) DO UPDATE
+              SET name=$2, updated_at=NOW()
+            """,
+            student_id,
+            name,
+        )
+        row = await conn.fetchrow("SELECT * FROM users WHERE google_sub=$1", google_sub)
+
+    return {
+        "id": row["id"],
+        "student_id": row["student_id"],
+        "email": row["email"],
+        "name": row["name"],
+        "avatar_url": row["avatar_url"],
+    }
+
+
 async def get_user_by_student_id(student_id: str) -> dict[str, Any] | None:
     async with get_conn() as conn:
         row = await conn.fetchrow(
@@ -1065,6 +1157,10 @@ async def get_course(course_id: str, student_id: str | None = None) -> dict[str,
     return data
 
 
+async def get_course_for_student(course_id: str, student_id: str) -> dict[str, Any] | None:
+    return await get_course(course_id, student_id)
+
+
 async def delete_course(course_id: str, student_id: str | None = None) -> bool:
     async with get_conn() as conn:
         async with conn.transaction():
@@ -1195,6 +1291,13 @@ async def list_course_modules(course_id: str) -> list[dict[str, Any]]:
     return [_module_payload(r, recommended_id) for r in rows]
 
 
+async def list_course_modules_for_student(course_id: str, student_id: str) -> list[dict[str, Any]]:
+    course = await get_course_for_student(course_id, student_id)
+    if not course:
+        return []
+    return await list_course_modules(course_id)
+
+
 async def get_course_module(course_id: str, module_id: str) -> dict[str, Any] | None:
     async with get_conn() as conn:
         row = await conn.fetchrow(
@@ -1207,6 +1310,17 @@ async def get_course_module(course_id: str, module_id: str) -> dict[str, Any] | 
     modules = await list_course_modules(course_id)
     recommended_id = next((m["id"] for m in modules if m["recommended"]), None)
     return _module_payload(row, recommended_id)
+
+
+async def get_course_module_for_student(
+    course_id: str,
+    module_id: str,
+    student_id: str,
+) -> dict[str, Any] | None:
+    course = await get_course_for_student(course_id, student_id)
+    if not course:
+        return None
+    return await get_course_module(course_id, module_id)
 
 
 async def set_module_status(course_id: str, module_id: str, status: str) -> None:
@@ -1377,6 +1491,33 @@ async def list_module_chat_history(course_id: str, module_id: str) -> list[dict[
             """,
             course_id,
             module_id,
+        )
+    history = []
+    for row in rows:
+        data = dict(row)
+        data["related_concepts"] = _json_value(data.get("related_concepts"), [])
+        data["possible_missing_prerequisites"] = _json_value(
+            data.get("possible_missing_prerequisites"), []
+        )
+        history.append(data)
+    return history
+
+
+async def list_module_chat_history_for_student(
+    course_id: str,
+    module_id: str,
+    student_id: str,
+) -> list[dict[str, Any]]:
+    async with get_conn() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT * FROM module_chat_messages
+             WHERE course_id=$1 AND module_id=$2 AND student_id=$3
+             ORDER BY created_at ASC
+            """,
+            course_id,
+            module_id,
+            student_id,
         )
     history = []
     for row in rows:
@@ -1619,6 +1760,27 @@ async def get_evaluation_session(session_id: str) -> dict[str, Any] | None:
     return data
 
 
+async def get_evaluation_session_for_student(
+    session_id: str,
+    student_id: str,
+) -> dict[str, Any] | None:
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT * FROM evaluation_sessions
+             WHERE session_id=$1 AND student_id=$2
+            """,
+            session_id,
+            student_id,
+        )
+    if not row:
+        return None
+    data = dict(row)
+    for key in ("questions_json", "answers_json", "final_report_json", "reteach_data_json"):
+        data[key] = _json_value(data.get(key), {} if "report" in key or "reteach" in key else [])
+    return data
+
+
 async def get_latest_evaluation_session(
     course_id: str, module_id: str
 ) -> dict[str, Any] | None:
@@ -1630,6 +1792,35 @@ async def get_latest_evaluation_session(
              ORDER BY created_at DESC LIMIT 1
             """,
             course_id, module_id,
+        )
+    if not row:
+        return None
+    data = dict(row)
+    for key in ("questions_json", "answers_json", "final_report_json", "reteach_data_json"):
+        data[key] = _json_value(data.get(key), {} if "report" in key or "reteach" in key else [])
+    return data
+
+
+async def get_latest_evaluation_session_for_student(
+    course_id: str,
+    module_id: str,
+    student_id: str,
+) -> dict[str, Any] | None:
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT es.*
+              FROM evaluation_sessions es
+              JOIN courses c ON c.id=es.course_id
+             WHERE es.course_id=$1
+               AND es.module_id=$2
+               AND es.student_id=$3
+               AND c.student_id=$3
+             ORDER BY es.created_at DESC LIMIT 1
+            """,
+            course_id,
+            module_id,
+            student_id,
         )
     if not row:
         return None
@@ -1679,17 +1870,23 @@ async def get_adaptation_summary(
     return _json_value(row["summary_json"], {}) if row else None
 
 
-async def get_compact_doubt_summary(course_id: str, module_id: str) -> str:
+async def get_compact_doubt_summary(
+    course_id: str,
+    module_id: str,
+    student_id: str | None = None,
+) -> str:
     """Return a compact 1-3 sentence summary of student doubts for this module."""
     async with get_conn() as conn:
+        where_student = "AND student_id=$3" if student_id else ""
+        args = (course_id, module_id, student_id) if student_id else (course_id, module_id)
         rows = await conn.fetch(
-            """
+            f"""
             SELECT role, message, doubt_type, created_at
               FROM module_chat_messages
-             WHERE course_id=$1 AND module_id=$2 AND role='user'
+             WHERE course_id=$1 AND module_id=$2 AND role='user' {where_student}
              ORDER BY created_at ASC
             """,
-            course_id, module_id,
+            *args,
         )
     if not rows:
         return ""

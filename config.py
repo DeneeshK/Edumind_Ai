@@ -16,8 +16,17 @@ class Settings(BaseSettings):
         default="",
         description="API key for EduMind API endpoints. Leave empty to disable auth (dev mode)."
     )
-    cors_origins: str = "http://localhost:5173"
+    cors_origins: str = "http://localhost:5173,http://localhost:3000"
     dev_auth_enabled: bool = True
+
+    # Google OAuth + app session cookies
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
+    frontend_url: str = "http://localhost:5173"
+    session_secret_key: str = ""
+    session_cookie_name: str = "edumind_session"
+    session_max_age_seconds: int = 604800
 
     # Database
     database_url: str = Field(

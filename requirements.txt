@@ -11,6 +11,10 @@ fastapi==0.111.1
 uvicorn[standard]==0.30.6
 slowapi==0.1.9
 
+# Auth
+google-auth==2.53.0
+python-jose==3.5.0
+
 # Data validation and settings
 pydantic==2.7.4
 pydantic-settings==2.3.4

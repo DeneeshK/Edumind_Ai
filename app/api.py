@@ -157,25 +157,18 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(PrometheusMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        origin.strip()
-        for origin in settings.cors_origins.split(",")
-        if origin.strip()
-    ] or ["*"],
-    allow_origin_regex=(
-        r"https?://(localhost|127\.0\.0\.1|0\.0\.0\.0|"
-        r"192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|"
-        r"172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+):\d+"
-        if settings.dev_auth_enabled else None
-    ),
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 from evaluation.api_router import router as eval_router
+from app.auth import router as auth_router
 from app.course_api import router as course_router
 
 app.include_router(eval_router)
+app.include_router(auth_router)
 app.include_router(course_router)
 
 

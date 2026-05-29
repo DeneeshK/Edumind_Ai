@@ -12,7 +12,7 @@ import json
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -23,6 +23,7 @@ from agents.evaluation_agent import (
     start_session as start_eval_session,
     submit_answer as submit_eval_answer,
 )
+from app.auth import require_current_user
 from core.course_service import (
     answer_module_chat,
     complete_module,
@@ -36,19 +37,21 @@ from core.course_service import (
     lesson_videos_from_module,
 )
 from db.postgres import (
+    get_course_for_student,
+    get_course_module_for_student,
     get_next_module,
     get_prev_module,
-    get_course,
     get_course_decision_log,
-    get_course_module,
     get_course_roadmap,
     get_student_dashboard,
     get_student_doubts,
     get_student_skills,
     get_user_by_student_id,
-    list_course_modules,
+    get_evaluation_session_for_student,
+    get_latest_evaluation_session_for_student,
+    list_course_modules_for_student,
     list_courses,
-    list_module_chat_history,
+    list_module_chat_history_for_student,
     upsert_dev_user,
 )
 
@@ -226,7 +229,7 @@ class DevLoginRequest(BaseModel):
 
 
 class CreateCourseRequest(BaseModel):
-    student_id: str
+    student_id: str | None = None
     topic: str | None = None
     goal: str | None = None
     goal_description: str | None = None
@@ -241,12 +244,12 @@ class CreateCourseRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    student_id: str
+    student_id: str | None = None
     message: str
 
 
 class EvaluateRequest(BaseModel):
-    student_id: str
+    student_id: str | None = None
     answer: str
     question_id: str
     confidence: int = Field(default=3, ge=1, le=5)
@@ -263,6 +266,43 @@ def _sse(data: Any, event: str = "message") -> str:
 async def _event_stream(events):
     async for item in events:
         yield _sse(item.get("data", ""), item.get("event", "message"))
+
+
+def _current_student_id(current_user: dict[str, Any]) -> str:
+    return str(current_user["student_id"])
+
+
+def _require_matching_student(student_id: str, current_user: dict[str, Any]) -> str:
+    current_student_id = _current_student_id(current_user)
+    if student_id != current_student_id:
+        raise HTTPException(status_code=404, detail="Student not found")
+    return current_student_id
+
+
+async def _require_owned_course(
+    course_id: str,
+    current_user: dict[str, Any],
+) -> dict[str, Any]:
+    course = await get_course_for_student(course_id, _current_student_id(current_user))
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    return course
+
+
+async def _require_owned_module(
+    course_id: str,
+    module_id: str,
+    current_user: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    course = await _require_owned_course(course_id, current_user)
+    module = await get_course_module_for_student(
+        course_id,
+        module_id,
+        _current_student_id(current_user),
+    )
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    return course, module
 
 
 @router.post("/auth/dev-login")
@@ -291,18 +331,24 @@ async def logout():
 
 
 @router.get("/courses")
-async def courses(student_id: str = Query(...)):
-    return {"courses": await list_courses(student_id)}
+async def courses(
+    student_id: str | None = Query(default=None),
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    return {"courses": await list_courses(_current_student_id(current_user))}
 
 
 @router.post("/courses")
-async def create_course_endpoint(req: CreateCourseRequest):
+async def create_course_endpoint(
+    req: CreateCourseRequest,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
     payload = course_payload_from_request(req)
     if not payload["topic"]:
         raise HTTPException(status_code=400, detail="topic is required")
     try:
         course = await create_course(
-            student_id=req.student_id,
+            student_id=_current_student_id(current_user),
             topic=payload["topic"],
             goal=payload["goal"],
             pace=payload["pace"],
@@ -322,13 +368,16 @@ async def create_course_endpoint(req: CreateCourseRequest):
 
 
 @router.post("/courses/create-intent")
-async def create_course_intent(req: CreateCourseRequest):
+async def create_course_intent(
+    req: CreateCourseRequest,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
     payload = course_payload_from_request(req)
     if not payload["topic"]:
         raise HTTPException(status_code=400, detail="topic is required")
     job_id = str(uuid.uuid4())
     _course_creation_jobs[job_id] = {
-        "student_id": req.student_id,
+        "student_id": _current_student_id(current_user),
         "topic": payload["topic"],
         "goal": payload["goal"],
         "pace": payload["pace"],
@@ -343,21 +392,28 @@ async def create_course_intent(req: CreateCourseRequest):
 
 
 @router.get("/courses/{course_id}")
-async def course_detail(course_id: str, student_id: str | None = Query(default=None)):
-    course = await get_course(course_id, student_id)
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-    course["modules"] = await list_course_modules(course_id)
+async def course_detail(
+    course_id: str,
+    student_id: str | None = Query(default=None),
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    course = await _require_owned_course(course_id, current_user)
+    course["modules"] = await list_course_modules_for_student(
+        course_id,
+        _current_student_id(current_user),
+    )
     course["roadmap"] = await get_course_roadmap(course_id)
     course["roadmap_ready"] = bool(course["roadmap"])
     return {"course": course}
 
 
 @router.get("/courses/{course_id}/roadmap")
-async def course_roadmap(course_id: str, student_id: str | None = Query(default=None)):
-    course = await get_course(course_id, student_id)
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
+async def course_roadmap(
+    course_id: str,
+    student_id: str | None = Query(default=None),
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    course = await _require_owned_course(course_id, current_user)
     roadmap = await get_course_roadmap(course_id)
     if not roadmap:
         raise HTTPException(status_code=404, detail="Roadmap not found")
@@ -365,16 +421,18 @@ async def course_roadmap(course_id: str, student_id: str | None = Query(default=
 
 
 @router.post("/courses/{course_id}/roadmap/regenerate")
-async def regenerate_course_roadmap(course_id: str, req: Request):
+async def regenerate_course_roadmap(
+    course_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
     from core.roadmap_service import CourseRoadmapService
     from db.postgres import save_course_roadmap
 
-    body = await req.json() if req.headers.get("content-length") else {}
-    student_id = body.get("student_id")
-    course = await get_course(course_id, student_id)
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
-    modules = await list_course_modules(course_id)
+    course = await _require_owned_course(course_id, current_user)
+    modules = await list_course_modules_for_student(
+        course_id,
+        _current_student_id(current_user),
+    )
     history = await get_student_history_snapshot(course["student_id"])
     profile = course.get("personalization_profile") or {}
     roadmap = CourseRoadmapService().build(course, modules, profile, history)
@@ -383,8 +441,17 @@ async def regenerate_course_roadmap(course_id: str, req: Request):
 
 
 @router.get("/courses/{course_id}/modules")
-async def course_modules(course_id: str):
-    return {"modules": await list_course_modules(course_id)}
+async def course_modules(
+    course_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    await _require_owned_course(course_id, current_user)
+    return {
+        "modules": await list_course_modules_for_student(
+            course_id,
+            _current_student_id(current_user),
+        )
+    }
 
 
 @router.get("/courses/{course_id}/modules/{module_id}")
@@ -393,16 +460,15 @@ async def course_module(
     module_id: str,
     student_id: str | None = Query(default=None),
     auto_generate: bool = Query(default=False),
+    current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    current_student_id = _current_student_id(current_user)
+    course, owned_module = await _require_owned_module(course_id, module_id, current_user)
     if auto_generate:
-        module = await generate_module_lesson(course_id, module_id, student_id)
+        module = await generate_module_lesson(course_id, module_id, current_student_id)
     else:
-        module = await get_course_module(course_id, module_id)
-        if not module:
-            raise HTTPException(status_code=404, detail="Module not found")
-        course = await get_course(course_id, student_id)
-        if course:
-            module["questions"] = []
+        module = owned_module
+        module["questions"] = []
         module["videos"] = lesson_videos_from_module(module)
         logger.info(
             "module_get_response_videos course_id='{}' module_id='{}' response_video_count={}",
@@ -414,30 +480,51 @@ async def course_module(
 
 
 @router.post("/courses/{course_id}/modules/{module_id}/generate")
-async def generate_module(course_id: str, module_id: str, req: Request):
-    body = await req.json() if req.headers.get("content-length") else {}
-    student_id = body.get("student_id")
-    module = await generate_module_lesson(course_id, module_id, student_id)
+async def generate_module(
+    course_id: str,
+    module_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    await _require_owned_module(course_id, module_id, current_user)
+    module = await generate_module_lesson(
+        course_id,
+        module_id,
+        _current_student_id(current_user),
+    )
     return {"module": module}
 
 
 @router.post("/courses/{course_id}/modules/{module_id}/complete")
-async def complete_module_endpoint(course_id: str, module_id: str, req: Request):
-    body = await req.json() if req.headers.get("content-length") else {}
+async def complete_module_endpoint(
+    course_id: str,
+    module_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    await _require_owned_module(course_id, module_id, current_user)
     try:
-        module = await complete_module(course_id, module_id, body.get("student_id"))
+        module = await complete_module(
+            course_id,
+            module_id,
+            _current_student_id(current_user),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return {"module": module}
 
 
 @router.post("/courses/{course_id}/modules/{module_id}/chat")
-async def module_chat(course_id: str, module_id: str, req: ChatRequest):
+async def module_chat(
+    course_id: str,
+    module_id: str,
+    req: ChatRequest,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    await _require_owned_module(course_id, module_id, current_user)
     try:
         return await answer_module_chat(
             course_id=course_id,
             module_id=module_id,
-            student_id=req.student_id,
+            student_id=_current_student_id(current_user),
             message=req.message,
         )
     except ValueError as exc:
@@ -445,26 +532,45 @@ async def module_chat(course_id: str, module_id: str, req: ChatRequest):
 
 
 @router.get("/courses/{course_id}/modules/{module_id}/chat-history")
-async def module_chat_history(course_id: str, module_id: str):
-    return {"messages": await list_module_chat_history(course_id, module_id)}
+async def module_chat_history(
+    course_id: str,
+    module_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    await _require_owned_module(course_id, module_id, current_user)
+    return {
+        "messages": await list_module_chat_history_for_student(
+            course_id,
+            module_id,
+            _current_student_id(current_user),
+        )
+    }
 
 
 @router.get("/courses/{course_id}/modules/{module_id}/questions")
-async def module_questions(course_id: str, module_id: str, student_id: str | None = Query(default=None)):
-    course = await get_course(course_id, student_id)
-    module = await get_course_module(course_id, module_id)
-    if not course or not module:
-        raise HTTPException(status_code=404, detail="Course or module not found")
+async def module_questions(
+    course_id: str,
+    module_id: str,
+    student_id: str | None = Query(default=None),
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    course, module = await _require_owned_module(course_id, module_id, current_user)
     return {"questions": await get_or_create_module_questions(course, module)}
 
 
 @router.post("/courses/{course_id}/modules/{module_id}/evaluate")
-async def module_evaluate(course_id: str, module_id: str, req: EvaluateRequest):
+async def module_evaluate(
+    course_id: str,
+    module_id: str,
+    req: EvaluateRequest,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    await _require_owned_module(course_id, module_id, current_user)
     try:
         return await evaluate_module_answer(
             course_id=course_id,
             module_id=module_id,
-            student_id=req.student_id,
+            student_id=_current_student_id(current_user),
             question_id=req.question_id,
             answer=req.answer,
             confidence=req.confidence,
@@ -488,6 +594,7 @@ async def evaluation_start(
     course_id: str,
     module_id: str,
     req: StartEvaluationRequest,
+    current_user: dict[str, Any] = Depends(require_current_user),
 ):
     """
     Start evaluation after the student clicks Next/Complete.
@@ -497,20 +604,18 @@ async def evaluation_start(
     will auto-generate the lesson first, then start the evaluation.
     This fixes the "Take a Quiz" button doing nothing when the module was never opened.
     """
-    student_id = req.student_id or ""
+    student_id = _current_student_id(current_user)
     try:
         # Auto-generate lesson if content is missing — this is the root cause of the
         # "Take a Quiz" button doing nothing: evaluation/start throws ValueError when
         # content_markdown is empty, and the frontend silently swallows it.
-        from db.postgres import get_course_module
-        module = await get_course_module(course_id, module_id)
+        course, module = await _require_owned_module(course_id, module_id, current_user)
         if module and not module.get("content_markdown"):
             logger.info(
                 "evaluation/start: lesson not yet generated for module '{}' — auto-generating before eval.",
                 module_id,
             )
             try:
-                course = await get_course(course_id, student_id)
                 if course:
                     await generate_module_lesson(
                         course_id=course_id,
@@ -527,6 +632,8 @@ async def evaluation_start(
             student_id=student_id,
         )
         return result
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -542,12 +649,24 @@ async def evaluation_submit_answer(
     module_id: str,
     session_id: str,
     req: SubmitAnswerRequest,
+    current_user: dict[str, Any] = Depends(require_current_user),
 ):
     """
     Submit one answer. Returns diagnosis and either the next question or the final report.
     If session_complete=True, the response contains the full evaluation report.
     """
     try:
+        await _require_owned_module(course_id, module_id, current_user)
+        session = await get_evaluation_session_for_student(
+            session_id,
+            _current_student_id(current_user),
+        )
+        if (
+            not session
+            or session.get("course_id") != course_id
+            or session.get("module_id") != module_id
+        ):
+            raise HTTPException(status_code=404, detail="Evaluation session not found")
         result = await submit_eval_answer(
             session_id=session_id,
             question_id=req.question_id,
@@ -555,6 +674,8 @@ async def evaluation_submit_answer(
             confidence=max(1, min(5, int(req.confidence or 3))),
         )
         return result
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -569,13 +690,27 @@ async def evaluation_report(
     course_id: str,
     module_id: str,
     session_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
 ):
     """
     Get the completed evaluation report for a session.
     """
     try:
+        await _require_owned_module(course_id, module_id, current_user)
+        session = await get_evaluation_session_for_student(
+            session_id,
+            _current_student_id(current_user),
+        )
+        if (
+            not session
+            or session.get("course_id") != course_id
+            or session.get("module_id") != module_id
+        ):
+            raise HTTPException(status_code=404, detail="Evaluation report not found")
         result = await get_session_report(session_id)
         return result
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
@@ -589,14 +724,19 @@ async def evaluation_report(
 async def evaluation_latest(
     course_id: str,
     module_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
 ):
     """
     Get the most recent evaluation session for this module (if any).
     Returns null if no evaluation has been done yet.
     """
-    from db.postgres import get_latest_evaluation_session
     try:
-        session = await get_latest_evaluation_session(course_id, module_id)
+        await _require_owned_module(course_id, module_id, current_user)
+        session = await get_latest_evaluation_session_for_student(
+            course_id,
+            module_id,
+            _current_student_id(current_user),
+        )
         if not session:
             return {"session": None, "message": "No evaluation done yet for this module."}
         return {
@@ -608,21 +748,33 @@ async def evaluation_latest(
                 "motivational_feedback": session["motivational_feedback"],
             }
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("Evaluation latest fetch failed")
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.get("/courses/{course_id}/modules/{module_id}/next")
-async def module_next(course_id: str, module_id: str):
+async def module_next(
+    course_id: str,
+    module_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
     """Return the next module in sequence. Used by the Next button."""
+    await _require_owned_module(course_id, module_id, current_user)
     mod = await get_next_module(course_id, module_id)
     return {"module": mod, "has_next": mod is not None}
 
 
 @router.get("/courses/{course_id}/modules/{module_id}/previous")
-async def module_previous(course_id: str, module_id: str):
+async def module_previous(
+    course_id: str,
+    module_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
     """Return the previous module in sequence. Used by the Previous button."""
+    await _require_owned_module(course_id, module_id, current_user)
     mod = await get_prev_module(course_id, module_id)
     return {"module": mod, "has_previous": mod is not None}
 
@@ -630,7 +782,8 @@ async def module_previous(course_id: str, module_id: str):
 @router.get("/courses/{course_id}/report")
 async def course_completion_report(
     course_id: str,
-    student_id: str = Query(...),
+    student_id: str | None = Query(default=None),
+    current_user: dict[str, Any] = Depends(require_current_user),
 ):
     """
     Get (or generate) the final course performance report.
@@ -638,8 +791,14 @@ async def course_completion_report(
     Call this when the course is fully completed.
     """
     try:
-        report = await generate_course_report(course_id=course_id, student_id=student_id)
+        await _require_owned_course(course_id, current_user)
+        report = await generate_course_report(
+            course_id=course_id,
+            student_id=_current_student_id(current_user),
+        )
         return {"report": report}
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
@@ -648,19 +807,23 @@ async def course_completion_report(
 
 
 @router.get("/students/{student_id}/skills/categorized")
-async def student_skills_categorized(student_id: str):
+async def student_skills_categorized(
+    student_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
     """
     Return student skills categorized into mastered / learning / weak.
     Used for the My Skills tab.
     """
-    skills = await get_student_skills(student_id)
+    current_student_id = _require_matching_student(student_id, current_user)
+    skills = await get_student_skills(current_student_id)
     nodes = skills.get("nodes") or []
     by_source: dict[str, list] = {}
     for n in nodes:
         src = n.get("source", "course")
         by_source.setdefault(src, []).append(n)
     return {
-        "student_id": student_id,
+        "student_id": current_student_id,
         "mastered": [n for n in nodes if n.get("status") == "mastered"],
         "learning": [n for n in nodes if n.get("status") == "learning"],
         "weak": [n for n in nodes if n.get("status") == "weak"],
@@ -672,32 +835,55 @@ async def student_skills_categorized(student_id: str):
 
 
 @router.get("/students/me/progress")
-async def my_progress(student_id: str = Query(...)):
-    return await get_student_dashboard(student_id)
+async def my_progress(
+    student_id: str | None = Query(default=None),
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    return await get_student_dashboard(_current_student_id(current_user))
 
 
 @router.get("/students/{student_id}/dashboard")
-async def student_dashboard(student_id: str):
-    return await get_student_dashboard(student_id)
+async def student_dashboard(
+    student_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    return await get_student_dashboard(_require_matching_student(student_id, current_user))
 
 
 @router.get("/students/{student_id}/skills")
-async def student_skills(student_id: str):
-    return await get_student_skills(student_id)
+async def student_skills(
+    student_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    return await get_student_skills(_require_matching_student(student_id, current_user))
 
 
 @router.get("/students/{student_id}/doubts")
-async def student_doubts(student_id: str):
-    return {"doubts": await get_student_doubts(student_id)}
+async def student_doubts(
+    student_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    return {
+        "doubts": await get_student_doubts(
+            _require_matching_student(student_id, current_user)
+        )
+    }
 
 
 @router.get("/students/{student_id}/courses")
-async def student_courses(student_id: str):
-    return {"courses": await list_courses(student_id)}
+async def student_courses(
+    student_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    return {"courses": await list_courses(_require_matching_student(student_id, current_user))}
 
 
 @router.get("/debug/courses/{course_id}/decision-log")
-async def course_decision_log(course_id: str):
+async def course_decision_log(
+    course_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    await _require_owned_course(course_id, current_user)
     return {"decision_log": await get_course_decision_log(course_id)}
 
 
@@ -714,8 +900,9 @@ async def debug_session_trace(session_id: str):
 
 @router.get("/stream/courses/create")
 async def stream_create_course(
-    student_id: str,
     topic: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+    student_id: str | None = Query(default=None),
     goal: str = "",
     pace: str = "medium",
     prior_knowledge: str = "",
@@ -730,7 +917,7 @@ async def stream_create_course(
         except json.JSONDecodeError:
             profile = {}
     payload = course_payload_from_request(CreateCourseRequest(
-        student_id=student_id,
+        student_id=_current_student_id(current_user),
         topic=topic,
         goal=goal,
         pace=pace,
@@ -741,7 +928,7 @@ async def stream_create_course(
 
     async def events():
         async for item in create_course_events(
-                student_id=student_id,
+                student_id=_current_student_id(current_user),
                 topic=payload["topic"],
                 goal=payload["goal"],
                 pace=payload["pace"],
@@ -759,9 +946,12 @@ async def stream_create_course(
 
 
 @router.get("/stream/courses/create/{job_id}")
-async def stream_create_course_job(job_id: str):
+async def stream_create_course_job(
+    job_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
     job = _course_creation_jobs.get(job_id)
-    if not job:
+    if not job or job.get("student_id") != _current_student_id(current_user):
         raise HTTPException(status_code=404, detail="course creation job not found")
 
     async def events():
@@ -787,16 +977,24 @@ async def stream_create_course_job(job_id: str):
 
 
 @router.get("/stream/courses/{course_id}/create")
-async def stream_existing_course_create(course_id: str):
+async def stream_existing_course_create(
+    course_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    await _require_owned_course(course_id, current_user)
+
     async def events():
-        course = await get_course(course_id)
+        course = await get_course_for_student(course_id, _current_student_id(current_user))
         if not course:
             yield {"event": "error", "data": {"message": "Course not found"}}
             return
         yield {"event": "connected", "data": {"message": "connected"}}
         course["roadmap"] = await get_course_roadmap(course_id)
         course["roadmap_ready"] = bool(course["roadmap"])
-        for module in await list_course_modules(course_id):
+        for module in await list_course_modules_for_student(
+            course_id,
+            _current_student_id(current_user),
+        ):
             yield {"event": "module_planned", "data": module}
         yield {"event": "done", "data": course}
 
@@ -812,9 +1010,17 @@ async def stream_generate_module(
     course_id: str,
     module_id: str,
     student_id: str | None = Query(default=None),
+    current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    await _require_owned_module(course_id, module_id, current_user)
     return StreamingResponse(
-        _event_stream(generate_module_lesson_events(course_id, module_id, student_id)),
+        _event_stream(
+            generate_module_lesson_events(
+                course_id,
+                module_id,
+                _current_student_id(current_user),
+            )
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

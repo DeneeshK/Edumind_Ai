@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.auth import require_current_user
 from db.postgres import get_conn
 
 router = APIRouter(prefix="/eval", tags=["evaluation"])
@@ -28,12 +29,19 @@ def _row_to_dict(row) -> dict:
 
 
 @router.get("/session/{session_id}")
-async def get_session_eval(session_id: str):
+async def get_session_eval(
+    session_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
     """Return the aggregated evaluation report for a session."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
-            "SELECT * FROM eval_session_reports WHERE session_id=$1",
+            """
+            SELECT * FROM eval_session_reports
+             WHERE session_id=$1 AND student_id=$2
+            """,
             session_id,
+            current_user["student_id"],
         )
     if not row:
         return {"error": "No evaluation report found for this session."}
@@ -46,13 +54,11 @@ async def list_metrics(
     metric_name: str | None = Query(None),
     component: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
+    current_user: dict[str, Any] = Depends(require_current_user),
 ):
     """List recent metric runs, filterable by student, metric name, or component."""
-    conditions = []
-    params: list[Any] = []
-    if student_id:
-        conditions.append(f"student_id=${len(params) + 1}")
-        params.append(student_id)
+    conditions = ["student_id=$1"]
+    params: list[Any] = [current_user["student_id"]]
     if metric_name:
         conditions.append(f"metric_name=${len(params) + 1}")
         params.append(metric_name)
@@ -93,19 +99,31 @@ async def get_aggregated_reports(period_type: str = Query("weekly")):
 
 
 @router.post("/run-manual/{session_id}")
-async def run_manual_eval(session_id: str):
+async def run_manual_eval(
+    session_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
     """
     Manually trigger a report for a past session using stored evaluation data.
     Live RAG and lesson metrics are not reconstructed from storage.
     """
     async with get_conn() as conn:
         evals = await conn.fetch(
-            "SELECT * FROM evaluation_history WHERE session_id=$1 ORDER BY created_at",
+            """
+            SELECT * FROM evaluation_history
+             WHERE session_id=$1 AND student_id=$2
+             ORDER BY created_at
+            """,
             session_id,
+            current_user["student_id"],
         )
         session = await conn.fetchrow(
-            "SELECT * FROM session_memory WHERE session_id=$1",
+            """
+            SELECT * FROM session_memory
+             WHERE session_id=$1 AND student_id=$2
+            """,
             session_id,
+            current_user["student_id"],
         )
 
     if not evals:
