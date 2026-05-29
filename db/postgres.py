@@ -1223,6 +1223,26 @@ async def get_course_roadmap(course_id: str) -> dict[str, Any] | None:
     roadmap.setdefault("course_id", row["course_id"])
     roadmap.setdefault("created_at", row["created_at"])
     roadmap.setdefault("updated_at", row["updated_at"])
+
+    # Patch module_timeline with live status and recommended_next from DB.
+    # The saved roadmap JSON is written once at generation time and never
+    # updated, so recommended_next is always stale. We fix it here so the
+    # frontend always sees the correct next module to study.
+    timeline = roadmap.get("module_timeline")
+    if timeline:
+        live_modules = await list_course_modules(course_id)
+        live_by_id = {m["id"]: m for m in live_modules}
+        # First non-completed module id is the recommended one
+        recommended_id = next(
+            (m["id"] for m in live_modules if m["status"] != "completed"),
+            live_modules[-1]["id"] if live_modules else None,
+        )
+        for item in timeline:
+            mid = item.get("module_id")
+            if mid and mid in live_by_id:
+                item["status"] = live_by_id[mid]["status"]
+                item["recommended_next"] = (mid == recommended_id)
+
     return roadmap
 
 
@@ -1291,11 +1311,63 @@ async def list_course_modules(course_id: str) -> list[dict[str, Any]]:
     return [_module_payload(r, recommended_id) for r in rows]
 
 
+async def get_eval_summaries_for_course(
+    course_id: str, student_id: str
+) -> dict[str, dict[str, Any]]:
+    """
+    Bulk-fetch the latest completed evaluation summary per module for one student.
+    Returns a dict keyed by module_id with mastery_score, has_report, session_id, decision.
+    Uses a single query — safe to call on every module-list request.
+    """
+    async with get_conn() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT ON (es.module_id)
+                   es.module_id,
+                   es.session_id,
+                   es.decision,
+                   (es.final_report_json->>'mastery_score')::float AS mastery_score
+              FROM evaluation_sessions es
+              JOIN courses c ON c.id = es.course_id
+             WHERE es.course_id = $1
+               AND es.student_id = $2
+               AND c.student_id = $2
+               AND es.status = 'completed'
+             ORDER BY es.module_id, es.created_at DESC
+            """,
+            course_id,
+            student_id,
+        )
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        result[row["module_id"]] = {
+            "session_id": row["session_id"],
+            "decision": row["decision"] or "",
+            "mastery_score": row["mastery_score"],
+            "has_report": True,
+        }
+    return result
+
+
 async def list_course_modules_for_student(course_id: str, student_id: str) -> list[dict[str, Any]]:
     course = await get_course_for_student(course_id, student_id)
     if not course:
         return []
-    return await list_course_modules(course_id)
+    modules = await list_course_modules(course_id)
+    eval_summaries = await get_eval_summaries_for_course(course_id, student_id)
+    for mod in modules:
+        summary = eval_summaries.get(mod["id"])
+        if summary:
+            mod["latest_mastery_score"] = summary["mastery_score"]
+            mod["has_eval_report"] = True
+            mod["latest_eval_session_id"] = summary["session_id"]
+            mod["latest_eval_decision"] = summary["decision"]
+        else:
+            mod["latest_mastery_score"] = None
+            mod["has_eval_report"] = False
+            mod["latest_eval_session_id"] = None
+            mod["latest_eval_decision"] = None
+    return modules
 
 
 async def get_course_module(course_id: str, module_id: str) -> dict[str, Any] | None:
@@ -1828,6 +1900,7 @@ async def get_latest_evaluation_session_for_student(
     for key in ("questions_json", "answers_json", "final_report_json", "reteach_data_json"):
         data[key] = _json_value(data.get(key), {} if "report" in key or "reteach" in key else [])
     return data
+
 
 
 async def save_adaptation_summary(

@@ -43,6 +43,7 @@ from db.postgres import (
     get_prev_module,
     get_course_decision_log,
     get_course_roadmap,
+    get_course_completion_report,
     get_student_dashboard,
     get_student_doubts,
     get_student_skills,
@@ -471,13 +472,13 @@ async def course_detail(
     student_id: str | None = Query(default=None),
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    sid = _current_student_id(current_user)
     course = await _require_owned_course(course_id, current_user)
-    course["modules"] = await list_course_modules_for_student(
-        course_id,
-        _current_student_id(current_user),
-    )
+    course["modules"] = await list_course_modules_for_student(course_id, sid)
     course["roadmap"] = await get_course_roadmap(course_id)
     course["roadmap_ready"] = bool(course["roadmap"])
+    cached_report = await get_course_completion_report(course_id, sid)
+    course["has_completion_report"] = bool(cached_report and cached_report.get("report"))
     return {"course": course}
 
 
@@ -747,6 +748,27 @@ async def evaluation_submit_answer(
             answer_text=req.answer_text,
             confidence=max(1, min(5, int(req.confidence or 3))),
         )
+
+        # Auto-complete the module when the evaluation finishes successfully.
+        # RETEACH decisions mean the student needs more work — do not mark complete.
+        # Failure here is non-fatal: the eval result is still returned to the client.
+        if result.get("session_complete") and result.get("decision", "") not in (
+            "RETEACH_ALL",
+            "RETEACH_WEAK_CONCEPTS",
+            "REPEAT_MODULE",
+        ):
+            try:
+                await complete_module(
+                    course_id,
+                    module_id,
+                    _current_student_id(current_user),
+                )
+            except Exception:
+                logger.warning(
+                    "Auto-complete module failed after eval (non-fatal)",
+                    exc_info=True,
+                )
+
         return result
     except HTTPException:
         raise
