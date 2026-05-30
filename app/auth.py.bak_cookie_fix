@@ -206,8 +206,8 @@ async def google_login():
         value=_create_state_token(state),
         max_age=STATE_COOKIE_MAX_AGE_SECONDS,
         httponly=True,
-        secure=True,
-        samesite="none",
+        secure=False,
+        samesite="lax",
         path="/",
     )
     return response
@@ -277,14 +277,14 @@ async def google_callback(
         value=_create_session_token(user),
         max_age=settings.session_max_age_seconds,
         httponly=True,
-        secure=True,
-        samesite="none",
+        secure=False,
+        samesite="lax",
         path="/",
     )
     response.delete_cookie(
         key=_state_cookie_name(),
         path="/",
-        samesite="none",
+        samesite="lax",
     )
     return response
 
@@ -303,11 +303,11 @@ async def logout():
     response.delete_cookie(
         key=settings.session_cookie_name,
         path="/",
-        samesite="none",
+        samesite="lax",
     )
     response.delete_cookie(
         key=_state_cookie_name(),
         path="/",
-        samesite="none",
+        samesite="lax",
     )
     return response
