@@ -72,11 +72,8 @@ docker compose logs -f backend
 docker compose down
 ```
 
-To remove the Postgres and ChromaDB named volumes too:
-
-```bash
-docker compose down -v
-```
+Do not use `docker compose down -v` in production. It deletes named volumes,
+including the Postgres data volume.
 
 ## Rebuild After Code Or Dependency Changes
 
@@ -99,4 +96,114 @@ The existing pytest suite is still run from the local Python environment:
 venv/bin/pytest -q
 venv/bin/pytest tests/unit -q
 venv/bin/pytest tests/integration -q
+```
+
+## Production Deployment On EC2
+
+Production runs from `/home/ubuntu/Edumind_Ai` on the EC2 host. The production
+`.env` file lives only on EC2, is ignored by Git, and must not be committed or
+overwritten by deployment.
+
+Manual production deploy command on EC2:
+
+```bash
+cd /home/ubuntu/Edumind_Ai
+git fetch origin main
+git reset --hard origin/main
+test -f .env
+docker compose up --build -d
+docker compose ps
+curl -f http://127.0.0.1:8000/health
+curl -f http://127.0.0.1:8000/ready
+curl -f https://course-api.edumindai.org/health
+curl -f https://course-api.edumindai.org/ready
+```
+
+Never run `docker compose down -v` on production. Keep the Docker named volumes
+intact so Postgres data stays safe.
+
+### Continuous Deployment Flow
+
+GitHub Actions deploys on every push to `main` using
+`.github/workflows/deploy-backend.yml`. The workflow SSHes into EC2, changes to
+`/home/ubuntu/Edumind_Ai`, fetches `origin/main`, resets the server checkout to
+`origin/main`, verifies `.env` exists, runs `docker compose up --build -d`, shows
+`docker compose ps`, and fails the deployment if any local or public health check
+fails.
+
+### GitHub Secrets
+
+Add these in GitHub:
+
+`GitHub repo -> Settings -> Secrets and variables -> Actions -> New repository secret`
+
+Required repository secrets:
+
+- `EC2_HOST`: EC2 public IP address or DNS name.
+- `EC2_USER`: SSH user, usually `ubuntu`.
+- `EC2_SSH_KEY`: private key content from your local `.pem` file.
+
+Optional repository secret:
+
+- `EC2_PORT`: SSH port. Omit it to use port `22`.
+
+`EC2_SSH_KEY` must be the full multiline private key content, not the public key
+and not a path to the file. Paste it exactly like this shape:
+
+```text
+-----BEGIN OPENSSH PRIVATE KEY-----
+...
+-----END OPENSSH PRIVATE KEY-----
+```
+
+Some older `.pem` files use this valid shape instead:
+
+```text
+-----BEGIN RSA PRIVATE KEY-----
+...
+-----END RSA PRIVATE KEY-----
+```
+
+The matching public key must already be authorized for `EC2_USER` on the EC2
+server, normally in `/home/ubuntu/.ssh/authorized_keys`.
+
+### Production Environment
+
+Keep production values in `/home/ubuntu/Edumind_Ai/.env` only. Required values
+include the real API keys, OAuth credentials, session secret, Postgres settings,
+and these production URL settings:
+
+```text
+FRONTEND_URL=https://edumindai.org
+CORS_ORIGINS=https://edumindai.org,https://www.edumindai.org,https://edumind-ai-frontend.vercel.app,http://localhost:5173,http://127.0.0.1:5173
+GOOGLE_REDIRECT_URI=https://course-api.edumindai.org/auth/google/callback
+RERANKER_ENABLED=false
+```
+
+For production, also keep `ENVIRONMENT=production` and do not use `*` in
+`CORS_ORIGINS`. If the Postgres volume already exists, keep the existing
+`POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` values aligned with that
+database.
+
+### Safe Recovery
+
+Check recent logs on EC2:
+
+```bash
+cd /home/ubuntu/Edumind_Ai
+docker compose logs --tail=200 backend
+docker compose logs --tail=120 postgres
+sudo tail -n 100 /var/log/nginx/error.log
+```
+
+To roll back to a known good commit, SSH into EC2 and run:
+
+```bash
+cd /home/ubuntu/Edumind_Ai
+git log --oneline -10
+git reset --hard <known-good-commit-sha>
+docker compose up --build -d
+docker compose ps
+curl -f http://127.0.0.1:8000/health
+curl -f http://127.0.0.1:8000/ready
 ```

@@ -10,6 +10,7 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-edumind} -d ${POSTGRES_DB:-edumind}"]
       interval: 10s
@@ -43,6 +44,7 @@ services:
       SESSION_MAX_AGE_SECONDS: ${SESSION_MAX_AGE_SECONDS:-604800}
       EVAL_ENABLED: ${EVAL_ENABLED:-false}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
+      RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
