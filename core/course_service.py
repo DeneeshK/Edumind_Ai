@@ -21,7 +21,7 @@ from core.metrics import metrics as _metrics
 
 from agents.curriculum_architect import CurriculumArchitectAgent
 from clients.groq_client import generate, stream
-# from clients.tavily_client import search as tavily_search  # V2: re-enable for LLM-triggered Tavily
+from clients.tavily_client import search as tavily_search  # V2: re-enable for LLM-triggered Tavily
 from config import settings
 from core.curriculum_quality import (
     concept_appears_in_text,

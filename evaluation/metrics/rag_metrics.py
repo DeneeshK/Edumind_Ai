@@ -29,21 +29,25 @@ def _tokenize(text: str) -> set[str]:
 
 
 def _get_embed_model():
-    global _embed_model
-    if _embed_model is None:
-        from sentence_transformers import SentenceTransformer
-
-        logger.info("Loading eval embed model '{}'...", settings.eval_embed_model)
-        _embed_model = SentenceTransformer(settings.eval_embed_model, device="cpu")
-    return _embed_model
+    # V1: disabled — sentence_transformers (~90 MB RAM) hashed out alongside ChromaDB/RAG.
+    # V2: uncomment body below.
+    return None
+    # global _embed_model                                      # V2
+    # if _embed_model is None:                                 # V2
+    #     from sentence_transformers import SentenceTransformer  # V2
+    #     logger.info("Loading eval embed model '{}'...", settings.eval_embed_model)  # V2
+    #     _embed_model = SentenceTransformer(settings.eval_embed_model, device="cpu")  # V2
+    # return _embed_model                                      # V2
 
 
 async def _embed_texts(texts: list[str]) -> list[list[float]]:
-    model = _get_embed_model()
-    vectors = await asyncio.to_thread(
-        lambda: model.encode(texts, normalize_embeddings=True)
-    )
-    return [v.tolist() if hasattr(v, "tolist") else list(v) for v in vectors]
+    # V1: disabled alongside embed model. Returns empty — callers handle gracefully.
+    return []
+    # model = _get_embed_model()                               # V2
+    # vectors = await asyncio.to_thread(                       # V2
+    #     lambda: model.encode(texts, normalize_embeddings=True)  # V2
+    # )                                                        # V2
+    # return [v.tolist() if hasattr(v, "tolist") else list(v) for v in vectors]  # V2
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -61,6 +65,8 @@ async def _semantic_similarity(left: str, right: str) -> float:
     if not left.strip() or not right.strip():
         return 0.0
     vectors = await _embed_texts([left, right])
+    if len(vectors) < 2:          # V1: embed model disabled, returns []
+        return 0.0
     return _cosine(vectors[0], vectors[1])
 
 
@@ -69,6 +75,8 @@ async def _similarities(query: str, texts: list[str]) -> list[float]:
     if not query.strip() or not clean:
         return []
     vectors = await _embed_texts([query] + clean)
+    if not vectors:               # V1: embed model disabled, returns []
+        return []
     query_vec = vectors[0]
     return [_cosine(query_vec, vec) for vec in vectors[1:]]
 
