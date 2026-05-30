@@ -13,9 +13,9 @@ import asyncio
 from loguru import logger
 
 from clients.groq_client import generate
-from clients.tavily_client import search as tavily_search
+# from clients.tavily_client import search as tavily_search  # V2: re-enable for LLM-triggered Tavily search
 from core.curriculum_quality import token_set
-from db.chromadb_client import search as chroma_search, rerank
+# from db.chromadb_client import search as chroma_search, rerank  # V2: re-enable when ChromaDB is back
 from config import settings
 
 _eval_runner_ref = None
@@ -88,82 +88,87 @@ async def retrieve(
     Returns:
         list of plain text strings, best-first
     """
-    chunks: list[str] = []
-    hypothetical = ""
-    tavily_results: list[dict] = []
+    # ── V1: RAG disabled to reduce EC2 RAM/CPU load ─────────────────────────
+    # ChromaDB (BGE-M3 ~2.2GB + Reranker ~1.2GB) and Tavily are hashed out.
+    # LLM generates lessons from training knowledge + Postgres module metadata.
+    # V2 plan: re-enable Tavily as an LLM-triggered tool — the tutor calls
+    # Tavily itself when it is not confident about a topic, fetches chunks once,
+    # and uses them for that lesson only. ChromaDB can come back after that.
+    return []
 
-    # ── Step 1 + 2: HyDE → ChromaDB ──────────────────────────────────────────
-    try:
-        hypothetical = await hyde(query)
-        if course_id:
-            where = {"course_id": course_id}
-        elif student_id:
-            where = {"student_id": student_id}
-        else:
-            where = None
-        chroma_results = await chroma_search(
-            query=hypothetical,
-            domain=domain,
-            top_k=top_k * 2,   # fetch more, reranker will trim
-            where=where,
-        )
-        relevant_chroma = [
-            chunk for chunk in chroma_results
-            if _is_relevant_chunk(chunk, query, topic)
-        ]
-        rejected = len(chroma_results) - len(relevant_chroma)
-        chunks.extend(relevant_chroma)
-        logger.info(
-            "ChromaDB contributed {} chunks for course_id={} module_id={} (rejected {})",
-            len(relevant_chroma), course_id, module_id, rejected,
-        )
-    except Exception as e:
-        logger.warning("ChromaDB retrieval failed: {} — continuing with Tavily only", e)
+    # ── V2 (restore below when ready) ────────────────────────────────────────
+    # chunks: list[str] = []
+    # hypothetical = ""
+    # tavily_results: list[dict] = []
 
-    # ── Step 3: Tavily web search ─────────────────────────────────────────────
-    try:
-        tavily_results = tavily_search(
-            query=f"{query} {domain}",
-            max_results=5,
-        )
-        rejected_web = 0
-        for r in tavily_results:
-            content = r.get("content", "").strip()
-            if content and len(content) > 50 and _is_relevant_chunk(content, query, topic):
-                chunks.append(content)
-            elif content:
-                rejected_web += 1
-        logger.info("Tavily contributed {} raw chunks (rejected {})", len(tavily_results), rejected_web)
-    except Exception as e:
-        logger.warning("Tavily retrieval failed: {} — continuing with ChromaDB only", e)
+    # # ── Step 1 + 2: HyDE → ChromaDB ──────────────────────────────────────
+    # try:
+    #     hypothetical = await hyde(query)
+    #     if course_id:
+    #         where = {"course_id": course_id}
+    #     elif student_id:
+    #         where = {"student_id": student_id}
+    #     else:
+    #         where = None
+    #     chroma_results = await chroma_search(
+    #         query=hypothetical,
+    #         domain=domain,
+    #         top_k=top_k * 2,
+    #         where=where,
+    #     )
+    #     relevant_chroma = [
+    #         chunk for chunk in chroma_results
+    #         if _is_relevant_chunk(chunk, query, topic)
+    #     ]
+    #     rejected = len(chroma_results) - len(relevant_chroma)
+    #     chunks.extend(relevant_chroma)
+    #     logger.info(
+    #         "ChromaDB contributed {} chunks for course_id={} module_id={} (rejected {})",
+    #         len(relevant_chroma), course_id, module_id, rejected,
+    #     )
+    # except Exception as e:
+    #     logger.warning("ChromaDB retrieval failed: {} — continuing with Tavily only", e)
 
-    if not chunks:
-        logger.warning("No chunks retrieved for query: '{}'", query)
-        return []
+    # # ── Step 3: Tavily web search ─────────────────────────────────────────
+    # try:
+    #     tavily_results = tavily_search(
+    #         query=f"{query} {domain}",
+    #         max_results=5,
+    #     )
+    #     rejected_web = 0
+    #     for r in tavily_results:
+    #         content = r.get("content", "").strip()
+    #         if content and len(content) > 50 and _is_relevant_chunk(content, query, topic):
+    #             chunks.append(content)
+    #         elif content:
+    #             rejected_web += 1
+    #     logger.info("Tavily contributed {} raw chunks (rejected {})", len(tavily_results), rejected_web)
+    # except Exception as e:
+    #     logger.warning("Tavily retrieval failed: {} — continuing with ChromaDB only", e)
 
-    # ── Step 4 + 5: Combine → Rerank ─────────────────────────────────────────
-    # Deduplicate by first 100 chars
-    seen: set[str] = set()
-    unique_chunks: list[str] = []
-    for c in chunks:
-        key = c[:100].strip()
-        if key not in seen:
-            seen.add(key)
-            unique_chunks.append(c)
+    # if not chunks:
+    #     logger.warning("No chunks retrieved for query: '{}'", query)
+    #     return []
 
-    final = await rerank(query=query, chunks=unique_chunks, top_k=top_k)
-    logger.info("RAG pipeline complete: {} final chunks for '{}'", len(final), query[:60])
-
-    if _eval_runner_ref is not None:
-        asyncio.create_task(
-            _eval_runner_ref.on_rag_retrieve(
-                query=query,
-                hypothetical=hypothetical,
-                concept_card="",
-                chroma_chunks_before_rerank=unique_chunks,
-                chroma_chunks_after_rerank=final,
-                tavily_results=tavily_results,
-            )
-        )
-
-    return final
+    # # ── Step 4 + 5: Combine → Rerank ─────────────────────────────────────
+    # seen: set[str] = set()
+    # unique_chunks: list[str] = []
+    # for c in chunks:
+    #     key = c[:100].strip()
+    #     if key not in seen:
+    #         seen.add(key)
+    #         unique_chunks.append(c)
+    # final = await rerank(query=query, chunks=unique_chunks, top_k=top_k)
+    # logger.info("RAG pipeline complete: {} final chunks for '{}'", len(final), query[:60])
+    # if _eval_runner_ref is not None:
+    #     asyncio.create_task(
+    #         _eval_runner_ref.on_rag_retrieve(
+    #             query=query,
+    #             hypothetical=hypothetical,
+    #             concept_card="",
+    #             chroma_chunks_before_rerank=unique_chunks,
+    #             chroma_chunks_after_rerank=final,
+    #             tavily_results=tavily_results,
+    #         )
+    #     )
+    # return final

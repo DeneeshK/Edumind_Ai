@@ -59,7 +59,7 @@ from core.student_model import (
     RoadmapStep,
     StudentState,
 )
-from db.chromadb_client import insert as chroma_insert
+# from db.chromadb_client import insert as chroma_insert  # V2: re-enable with ChromaDB
 from db.postgres import get_conn
 
 
@@ -1147,68 +1147,70 @@ Return STRICT JSON only: {"modules": [...], "repair_rationale": "..."}"""
         logger.info("Curriculum built: {} modules for topic='{}' (confidence={:.2f})",
                     len(modules), plan.topic, confidence)
 
-        # Fire-and-forget ChromaDB embedding
-        async def _embed_background():
-            try:
-                await self._embed_to_chromadb(plan, int(row["id"]))
-            except Exception as exc:
-                logger.warning("Background ChromaDB embedding failed for id={}: {}.", row["id"], exc)
-
-        asyncio.create_task(_embed_background())
+        # V1: ChromaDB background embedding disabled (BGE-M3 ~2.2GB RAM, crashes EC2).
+        # V2: uncomment below to re-enable after moving to memory-optimised instance.
+        # async def _embed_background():                       # V2
+        #     try:                                             # V2
+        #         await self._embed_to_chromadb(plan, int(row["id"]))  # V2
+        #     except Exception as exc:                         # V2
+        #         logger.warning("Background ChromaDB embedding failed for id={}: {}.", row["id"], exc)  # V2
+        # asyncio.create_task(_embed_background())             # V2
         return plan
 
     # ── ChromaDB ──────────────────────────────────────────────────────────────
 
     async def _embed_to_chromadb(self, plan: CurriculumPlan, curriculum_id: int | None = None) -> None:
-        domain = plan.domain
-        embedded, failed = 0, 0
-        course_id = f"course-{curriculum_id}" if curriculum_id is not None else ""
-        for module in plan.modules:
-            concept = module.concept
-            framing = module.domain_framing
-            prereqs = ", ".join(module.prerequisites) if module.prerequisites else "none"
-            safe_concept = re.sub(r"[^a-zA-Z0-9_]", "_", concept)[:60]
-            lines = [
-                f"Course topic: {plan.topic}", f"Course goal: {plan.goal}", f"Domain: {domain}",
-                f"Module id: {module.id}", f"Roadmap step id: {module.roadmap_step_id}",
-                f"Module title: {module.title}", f"Concept: {concept}",
-                f"Concepts taught: {', '.join(module.concepts_taught or [concept])}",
-                f"Must teach: {', '.join(module.must_teach or module.concepts_taught or [concept])}",
-                f"Prerequisites: {prereqs}", f"Depth level: {module.depth_level}",
-                f"Estimated minutes: {module.estimated_minutes}", f"Purpose: {module.purpose}",
-                f"Goal alignment: {module.why_it_matters_for_goal}",
-                f"Lesson requirements: {', '.join(module.lesson_requirements or [])}",
-                f"Practice requirements: {', '.join(module.practice_requirements or [])}",
-                f"Question scope: {', '.join(module.question_scope or [])}",
-                f"Domain framing: {framing}",
-            ]
-            full_text = "\n".join(line for line in lines if line.split(": ", 1)[-1].strip())
-            chunk_id = (plan.topic + "_" + safe_concept).replace(" ", "_")[:180]
-            try:
-                await chroma_insert(chunk_id, domain, full_text,
-                                    metadata={
-                                        "course_id": course_id,
-                                        "curriculum_id": str(curriculum_id or ""),
-                                        "topic": plan.topic, "module_id": module.id, "concept": concept,
-                                    })
-                if curriculum_id is not None:
-                    async with get_conn() as conn:
-                        await conn.execute(
-                            "INSERT INTO module_embeddings (student_id, curriculum_id, module_id, chromadb_id, domain) "
-                            "VALUES ($1, $2, $3, $4, $5) ON CONFLICT (student_id, module_id) DO UPDATE "
-                            "SET curriculum_id=$2, chromadb_id=$4, domain=$5",
-                            self.state.student_id, curriculum_id, module.id, chunk_id, domain,
-                        )
-                        await conn.execute(
-                            "INSERT INTO dynamic_concept_summaries "
-                            "(student_id, curriculum_id, module_id, concept, domain, summary_text, chromadb_id) "
-                            "VALUES ($1, $2, $3, $4, $5, $6, $7) "
-                            "ON CONFLICT (student_id, module_id) DO UPDATE "
-                            "SET curriculum_id=$2, concept=$4, domain=$5, summary_text=$6, chromadb_id=$7, updated_at=NOW()",
-                            self.state.student_id, curriculum_id, module.id, concept, domain, full_text, chunk_id,
-                        )
-                embedded += 1
-            except Exception as exc:
-                failed += 1
-                logger.warning("ChromaDB insert failed for concept='{}': {}.", concept, exc)
-        logger.info("ChromaDB: {}/{} modules embedded for domain='{}'.", embedded, len(plan.modules), domain)
+        """V1: disabled — full body hashed out below. V2: uncomment to restore."""
+        return
+        # domain = plan.domain                                 # V2
+        # embedded, failed = 0, 0                             # V2
+        # course_id = f"course-{curriculum_id}" if curriculum_id is not None else ""  # V2
+        # for module in plan.modules:                          # V2
+        #     concept = module.concept                         # V2
+        #     framing = module.domain_framing                  # V2
+        #     prereqs = ", ".join(module.prerequisites) if module.prerequisites else "none"  # V2
+        #     safe_concept = re.sub(r"[^a-zA-Z0-9_]", "_", concept)[:60]  # V2
+        #     lines = [                                        # V2
+        #         f"Course topic: {plan.topic}", f"Course goal: {plan.goal}", f"Domain: {domain}",  # V2
+        #         f"Module id: {module.id}", f"Roadmap step id: {module.roadmap_step_id}",  # V2
+        #         f"Module title: {module.title}", f"Concept: {concept}",  # V2
+        #         f"Concepts taught: {', '.join(module.concepts_taught or [concept])}",  # V2
+        #         f"Must teach: {', '.join(module.must_teach or module.concepts_taught or [concept])}",  # V2
+        #         f"Prerequisites: {prereqs}", f"Depth level: {module.depth_level}",  # V2
+        #         f"Estimated minutes: {module.estimated_minutes}", f"Purpose: {module.purpose}",  # V2
+        #         f"Goal alignment: {module.why_it_matters_for_goal}",  # V2
+        #         f"Lesson requirements: {', '.join(module.lesson_requirements or [])}",  # V2
+        #         f"Practice requirements: {', '.join(module.practice_requirements or [])}",  # V2
+        #         f"Question scope: {', '.join(module.question_scope or [])}",  # V2
+        #         f"Domain framing: {framing}",                # V2
+        #     ]                                                # V2
+        #     full_text = "\n".join(line for line in lines if line.split(": ", 1)[-1].strip())  # V2
+        #     chunk_id = (plan.topic + "_" + safe_concept).replace(" ", "_")[:180]  # V2
+        #     try:                                             # V2
+        #         await chroma_insert(chunk_id, domain, full_text,  # V2
+        #                             metadata={               # V2
+        #                                 "course_id": course_id,  # V2
+        #                                 "curriculum_id": str(curriculum_id or ""),  # V2
+        #                                 "topic": plan.topic, "module_id": module.id, "concept": concept,  # V2
+        #                             })                       # V2
+        #         if curriculum_id is not None:                # V2
+        #             async with get_conn() as conn:           # V2
+        #                 await conn.execute(                  # V2
+        #                     "INSERT INTO module_embeddings (student_id, curriculum_id, module_id, chromadb_id, domain) "  # V2
+        #                     "VALUES ($1, $2, $3, $4, $5) ON CONFLICT (student_id, module_id) DO UPDATE "  # V2
+        #                     "SET curriculum_id=$2, chromadb_id=$4, domain=$5",  # V2
+        #                     self.state.student_id, curriculum_id, module.id, chunk_id, domain,  # V2
+        #                 )                                    # V2
+        #                 await conn.execute(                  # V2
+        #                     "INSERT INTO dynamic_concept_summaries "  # V2
+        #                     "(student_id, curriculum_id, module_id, concept, domain, summary_text, chromadb_id) "  # V2
+        #                     "VALUES ($1, $2, $3, $4, $5, $6, $7) "  # V2
+        #                     "ON CONFLICT (student_id, module_id) DO UPDATE "  # V2
+        #                     "SET curriculum_id=$2, concept=$4, domain=$5, summary_text=$6, chromadb_id=$7, updated_at=NOW()",  # V2
+        #                     self.state.student_id, curriculum_id, module.id, concept, domain, full_text, chunk_id,  # V2
+        #                 )                                    # V2
+        #         embedded += 1                                # V2
+        #     except Exception as exc:                         # V2
+        #         failed += 1                                  # V2
+        #         logger.warning("ChromaDB insert failed for concept='{}': {}.", concept, exc)  # V2
+        # logger.info("ChromaDB: {}/{} modules embedded for domain='{}'.", embedded, len(plan.modules), domain)  # V2

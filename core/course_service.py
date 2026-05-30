@@ -21,7 +21,7 @@ from core.metrics import metrics as _metrics
 
 from agents.curriculum_architect import CurriculumArchitectAgent
 from clients.groq_client import generate, stream
-from clients.tavily_client import search as tavily_search
+# from clients.tavily_client import search as tavily_search  # V2: re-enable for LLM-triggered Tavily
 from config import settings
 from core.curriculum_quality import (
     concept_appears_in_text,
@@ -35,7 +35,7 @@ from core.curriculum_quality import (
     validate_lesson_quality,
     validate_questions_grounded,
 )
-from core.rag_pipeline import retrieve
+# from core.rag_pipeline import retrieve  # V2: re-enable when RAG is back
 from core.roadmap_service import CourseRoadmapService
 from core.student_model import StudentState
 from db.postgres import (
@@ -1642,19 +1642,20 @@ async def generate_module_lesson(
     adaptation_context = await adaptation_context_for_module(
         course["student_id"], course_id, module
     )
-    try:
-        context_chunks = await retrieve(
-            query=f"{module['concept']} {course['topic']} {course['goal']}",
-            domain=infer_domain(course["topic"], course["goal"]),
-            top_k=4,
-            course_id=course_id,
-            student_id=course["student_id"],
-            topic=course.get("topic"),
-            module_id=module_id,
-        )
-    except Exception as exc:
-        logger.warning("Lesson RAG failed for '{}': {}", module["concept"], exc)
-        context_chunks = []
+    context_chunks: list[str] = []  # V1: RAG disabled
+    # try:                                                     # V2
+    #     context_chunks = await retrieve(                     # V2
+    #         query=f"{module['concept']} {course['topic']} {course['goal']}",  # V2
+    #         domain=infer_domain(course["topic"], course["goal"]),  # V2
+    #         top_k=4,                                         # V2
+    #         course_id=course_id,                             # V2
+    #         student_id=course["student_id"],                 # V2
+    #         topic=course.get("topic"),                       # V2
+    #         module_id=module_id,                             # V2
+    #     )                                                    # V2
+    # except Exception as exc:                                 # V2
+    #     logger.warning("Lesson RAG failed for '{}': {}", module["concept"], exc)  # V2
+    #     context_chunks = []                                  # V2
 
     try:
         content = await generate(
@@ -1748,18 +1749,19 @@ async def generate_module_lesson_events(
     adaptation_context = await adaptation_context_for_module(
         course["student_id"], course_id, module
     )
-    try:
-        context_chunks = await retrieve(
-            query=f"{module['concept']} {course['topic']} {course['goal']}",
-            domain=infer_domain(course["topic"], course["goal"]),
-            top_k=4,
-            course_id=course_id,
-            student_id=course["student_id"],
-            topic=course.get("topic"),
-            module_id=module_id,
-        )
-    except Exception:
-        context_chunks = []
+    context_chunks: list[str] = []  # V1: RAG disabled
+    # try:                                                     # V2
+    #     context_chunks = await retrieve(                     # V2
+    #         query=f"{module['concept']} {course['topic']} {course['goal']}",  # V2
+    #         domain=infer_domain(course["topic"], course["goal"]),  # V2
+    #         top_k=4,                                         # V2
+    #         course_id=course_id,                             # V2
+    #         student_id=course["student_id"],                 # V2
+    #         topic=course.get("topic"),                       # V2
+    #         module_id=module_id,                             # V2
+    #     )                                                    # V2
+    # except Exception:                                        # V2
+    #     context_chunks = []                                  # V2
 
     chunks: list[str] = []
     try:
@@ -1918,16 +1920,17 @@ async def answer_module_chat(
     context = module.get("content_markdown") or ""
     if not context:
         raise ValueError("Generate the lesson before opening module chat.")
-    try:
-        rag = await retrieve(
-            query=f"{message} {module['concept']}",
-            domain=infer_domain(course["topic"], course["goal"]),
-            top_k=3,
-            course_id=course_id,
-            student_id=student_id,
-        )
-    except Exception:
-        rag = []
+    rag: list[str] = []  # V1: RAG disabled
+    # try:                                                     # V2
+    #     rag = await retrieve(                                # V2
+    #         query=f"{message} {module['concept']}",          # V2
+    #         domain=infer_domain(course["topic"], course["goal"]),  # V2
+    #         top_k=3,                                         # V2
+    #         course_id=course_id,                             # V2
+    #         student_id=student_id,                           # V2
+    #     )                                                    # V2
+    # except Exception:                                        # V2
+    #     rag = []                                             # V2
 
     prompt = f"""A student asked a doubt in the side chat.
 
