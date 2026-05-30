@@ -164,7 +164,6 @@ async def test_generate_module_lesson_saves_mocked_content_without_questions(mon
     monkeypatch.setattr(course_service, "set_module_status", AsyncMock())
     monkeypatch.setattr(course_service, "list_course_modules", AsyncMock(return_value=[module]))
     monkeypatch.setattr(course_service, "adaptation_context_for_module", AsyncMock(return_value={}))
-    monkeypatch.setattr(course_service, "retrieve", AsyncMock(return_value=[]))
     monkeypatch.setattr(course_service, "generate", fake_generate)
     monkeypatch.setattr(
         course_service,
