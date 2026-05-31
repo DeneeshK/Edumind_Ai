@@ -101,6 +101,7 @@ SAFE_PROFILE_KEYS = {
 
 
 def _safe_creation_profile(profile: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep only course-creation profile fields that are safe to persist and reuse."""
     if not isinstance(profile, dict):
         return {}
     source = profile.get("profile") if isinstance(profile.get("profile"), dict) else profile
@@ -127,15 +128,18 @@ DEPTH_BY_PACE = {
 
 
 def _clean_text(value: Any) -> str:
+    """Normalize optional user-facing text fields to stripped strings."""
     return str(value or "").strip()
 
 
 def _valid_pace(value: Any) -> str:
+    """Return a supported course pace, defaulting to medium."""
     pace = _clean_text(value).lower()
     return pace if pace in {"fast", "medium", "deep"} else "medium"
 
 
 def _level_label(value: Any) -> str:
+    """Convert frontend learner-level keys into display labels."""
     key = _clean_text(value).lower()
     return LEVEL_LABELS.get(key, _clean_text(value))
 
@@ -149,8 +153,9 @@ def _time_commitment_text(
 ) -> str:
     """
     Build a plain-English time constraint string from structured time fields.
-    Examples: "3 weeks, 2 hours/day"  |  "10 days, 1.5 hours/day, target by 2026-06-15"
-    Legacy time_commitment dict handled for backward compat.
+
+    Legacy `time_commitment` payloads are still accepted so existing clients can
+    submit older setup data without changing the course-generation contract.
     """
     parts = []
     if duration_value and duration_unit:
@@ -180,7 +185,7 @@ def _time_commitment_text(
 
 
 def course_payload_from_request(req: "CreateCourseRequest") -> dict[str, Any]:
-    """Normalize the guided setup request into course-generation inputs."""
+    """Normalize the guided setup request into the course-generation service payload."""
     source = _safe_creation_profile(req.profile or {})
     topic = _clean_text(req.topic or source.get("topic") or source.get("exact_subject"))
     goal_description = _clean_text(
@@ -195,7 +200,7 @@ def course_payload_from_request(req: "CreateCourseRequest") -> dict[str, Any]:
     learner_level = _level_label(current_level or source.get("learner_level"))
     prior_experience = _clean_text(req.prior_experience or source.get("prior_experience"))
 
-    # Structured time fields (new) + legacy dict compat
+    # Prefer structured time fields, while preserving legacy dict compatibility.
     duration_value = req.duration_value or None
     duration_unit = _clean_text(req.duration_unit or source.get("duration_unit")).lower() or None
     hours_per_day = req.hours_per_day or None
@@ -215,7 +220,7 @@ def course_payload_from_request(req: "CreateCourseRequest") -> dict[str, Any]:
         deadline=deadline,
     ) or _clean_text(source.get("time_constraint"))
 
-    # Personalisation lists — merge request fields with profile source
+    # Merge personalization lists from both direct request fields and profile data.
     known_concepts = list(dict.fromkeys(
         list(getattr(req, "known_concepts", None) or [])
         + list(source.get("known_concepts") or [])
@@ -287,12 +292,16 @@ def course_payload_from_request(req: "CreateCourseRequest") -> dict[str, Any]:
 
 
 class DevLoginRequest(BaseModel):
+    """Development-only login payload used when local auth bypass is enabled."""
+
     name: str = "EduMind Student"
     email: str = "student@edumind.dev"
     avatar_url: str = ""
 
 
 class CreateCourseRequest(BaseModel):
+    """Frontend payload for creating a personalized course from guided setup."""
+
     student_id: str | None = None
     topic: str | None = None
     goal: str | None = None
@@ -319,11 +328,15 @@ class CreateCourseRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    """Request body for asking a question inside a generated module."""
+
     student_id: str | None = None
     message: str
 
 
 class EvaluateRequest(BaseModel):
+    """Request body for answering one module check question."""
+
     student_id: str | None = None
     answer: str
     question_id: str
@@ -331,6 +344,7 @@ class EvaluateRequest(BaseModel):
 
 
 def _sse(data: Any, event: str = "message") -> str:
+    """Format data as a Server-Sent Event frame."""
     if not isinstance(data, str):
         data = json.dumps(data, default=str)
     lines = data.splitlines() or [""]
@@ -339,15 +353,18 @@ def _sse(data: Any, event: str = "message") -> str:
 
 
 async def _event_stream(events):
+    """Convert internal event dictionaries into SSE frames."""
     async for item in events:
         yield _sse(item.get("data", ""), item.get("event", "message"))
 
 
 def _current_student_id(current_user: dict[str, Any]) -> str:
+    """Extract the authenticated student's id from the auth dependency payload."""
     return str(current_user["student_id"])
 
 
 def _require_matching_student(student_id: str, current_user: dict[str, Any]) -> str:
+    """Reject requests for a student id that does not match the authenticated user."""
     current_student_id = _current_student_id(current_user)
     if student_id != current_student_id:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -358,6 +375,7 @@ async def _require_owned_course(
     course_id: str,
     current_user: dict[str, Any],
 ) -> dict[str, Any]:
+    """Load a course only when it belongs to the authenticated student."""
     course = await get_course_for_student(course_id, _current_student_id(current_user))
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
@@ -369,6 +387,7 @@ async def _require_owned_module(
     module_id: str,
     current_user: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load a course module only when both course and module belong to the student."""
     course = await _require_owned_course(course_id, current_user)
     module = await get_course_module_for_student(
         course_id,
@@ -382,6 +401,7 @@ async def _require_owned_module(
 
 @router.post("/auth/dev-login")
 async def dev_login(req: DevLoginRequest):
+    """Create or update a development user profile and return it."""
     profile = await upsert_dev_user(
         email=req.email,
         name=req.name,
@@ -392,6 +412,7 @@ async def dev_login(req: DevLoginRequest):
 
 @router.get("/auth/me")
 async def auth_me(student_id: str = Query(default="")):
+    """Return the development-mode user profile for the provided student id."""
     if not student_id:
         raise HTTPException(status_code=401, detail="student_id is required in dev mode")
     profile = await get_user_by_student_id(student_id)
@@ -402,6 +423,7 @@ async def auth_me(student_id: str = Query(default="")):
 
 @router.post("/auth/logout")
 async def logout():
+    """Return a no-op logout response for the development auth route."""
     return {"status": "ok"}
 
 
@@ -410,6 +432,7 @@ async def courses(
     student_id: str | None = Query(default=None),
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """List courses owned by the authenticated student."""
     return {"courses": await list_courses(_current_student_id(current_user))}
 
 
@@ -418,6 +441,7 @@ async def create_course_endpoint(
     req: CreateCourseRequest,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Create a course immediately and return its saved roadmap payload."""
     payload = course_payload_from_request(req)
     if not payload["topic"]:
         raise HTTPException(status_code=400, detail="topic is required")
@@ -447,6 +471,7 @@ async def create_course_intent(
     req: CreateCourseRequest,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Create a short-lived streaming job for course generation."""
     payload = course_payload_from_request(req)
     if not payload["topic"]:
         raise HTTPException(status_code=400, detail="topic is required")
@@ -472,6 +497,7 @@ async def course_detail(
     student_id: str | None = Query(default=None),
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Return one course with modules, roadmap readiness, and completion-report state."""
     sid = _current_student_id(current_user)
     course = await _require_owned_course(course_id, current_user)
     course["modules"] = await list_course_modules_for_student(course_id, sid)
@@ -488,6 +514,7 @@ async def course_roadmap(
     student_id: str | None = Query(default=None),
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Return the saved roadmap for a course owned by the authenticated student."""
     course = await _require_owned_course(course_id, current_user)
     roadmap = await get_course_roadmap(course_id)
     if not roadmap:
@@ -500,6 +527,7 @@ async def regenerate_course_roadmap(
     course_id: str,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Regenerate and persist a course roadmap from existing modules."""
     from core.roadmap_service import CourseRoadmapService
     from db.postgres import save_course_roadmap
 
@@ -520,6 +548,7 @@ async def course_modules(
     course_id: str,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """List saved modules for a course."""
     await _require_owned_course(course_id, current_user)
     return {
         "modules": await list_course_modules_for_student(
@@ -537,6 +566,7 @@ async def course_module(
     auto_generate: bool = Query(default=False),
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Return one module, optionally generating lesson content before responding."""
     current_student_id = _current_student_id(current_user)
     course, owned_module = await _require_owned_module(course_id, module_id, current_user)
     if auto_generate:
@@ -560,6 +590,7 @@ async def generate_module(
     module_id: str,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Generate and persist lesson content for a module."""
     await _require_owned_module(course_id, module_id, current_user)
     module = await generate_module_lesson(
         course_id,
@@ -575,6 +606,7 @@ async def complete_module_endpoint(
     module_id: str,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Mark a module complete for the authenticated student."""
     await _require_owned_module(course_id, module_id, current_user)
     try:
         module = await complete_module(
@@ -594,6 +626,7 @@ async def module_chat(
     req: ChatRequest,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Answer a student's module chat message and persist the doubt trace."""
     await _require_owned_module(course_id, module_id, current_user)
     try:
         return await answer_module_chat(
@@ -612,6 +645,7 @@ async def module_chat_history(
     module_id: str,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Return module chat history visible to the authenticated student."""
     await _require_owned_module(course_id, module_id, current_user)
     return {
         "messages": await list_module_chat_history_for_student(
@@ -629,6 +663,7 @@ async def module_questions(
     student_id: str | None = Query(default=None),
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Return saved module questions, generating them from the lesson when needed."""
     course, module = await _require_owned_module(course_id, module_id, current_user)
     return {"questions": await get_or_create_module_questions(course, module)}
 
@@ -640,6 +675,7 @@ async def module_evaluate(
     req: EvaluateRequest,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Evaluate one answer against a generated module question."""
     await _require_owned_module(course_id, module_id, current_user)
     try:
         return await evaluate_module_answer(
@@ -655,10 +691,14 @@ async def module_evaluate(
 
 
 class StartEvaluationRequest(BaseModel):
+    """Request body for starting a module evaluation session."""
+
     student_id: str | None = None
 
 
 class SubmitAnswerRequest(BaseModel):
+    """Request body for submitting one answer during module evaluation."""
+
     question_id: str
     answer_text: str
     confidence: int = 3  # 1-5
@@ -672,18 +712,15 @@ async def evaluation_start(
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
     """
-    Start evaluation after the student clicks Next/Complete.
-    Returns session_id and the first batch of questions.
+    Start evaluation after the student clicks Next or Complete.
 
-    If the lesson has not been generated yet (no content_markdown), this endpoint
-    will auto-generate the lesson first, then start the evaluation.
-    This fixes the "Take a Quiz" button doing nothing when the module was never opened.
+    If lesson content is missing, the endpoint generates the lesson first so
+    evaluation can still start from a grounded module body.
     """
     student_id = _current_student_id(current_user)
     try:
-        # Auto-generate lesson if content is missing — this is the root cause of the
-        # "Take a Quiz" button doing nothing: evaluation/start throws ValueError when
-        # content_markdown is empty, and the frontend silently swallows it.
+        # Evaluation requires lesson content; generate it lazily when the student
+        # reaches the quiz before opening the module page.
         course, module = await _require_owned_module(course_id, module_id, current_user)
         if module and not module.get("content_markdown"):
             logger.info(
@@ -699,7 +736,7 @@ async def evaluation_start(
                     )
             except Exception as gen_exc:
                 logger.warning("Auto-lesson generation before eval failed: {}", gen_exc)
-                # Don't abort — try to start eval anyway; it may have partial content
+                # Keep evaluation as the source of truth for whether enough content exists.
 
         result = await start_eval_session(
             course_id=course_id,
@@ -727,8 +764,10 @@ async def evaluation_submit_answer(
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
     """
-    Submit one answer. Returns diagnosis and either the next question or the final report.
-    If session_complete=True, the response contains the full evaluation report.
+    Submit one evaluation answer.
+
+    The response either contains the next question or the final report when the
+    session has completed.
     """
     try:
         await _require_owned_module(course_id, module_id, current_user)
@@ -789,7 +828,7 @@ async def evaluation_report(
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
     """
-    Get the completed evaluation report for a session.
+    Return the completed evaluation report for a verified session.
     """
     try:
         await _require_owned_module(course_id, module_id, current_user)
@@ -823,8 +862,7 @@ async def evaluation_latest(
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
     """
-    Get the most recent evaluation session for this module (if any).
-    Returns null if no evaluation has been done yet.
+    Return the most recent evaluation session summary for a module, if present.
     """
     try:
         await _require_owned_module(course_id, module_id, current_user)
@@ -860,10 +898,9 @@ async def evaluation_latest_full(
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
     """
-    Get the FULL completed evaluation report for a module (most recent session).
-    Returns the complete final_report, feedback, and decision so the frontend
-    can re-render the progress report without it vanishing on module re-open.
-    Returns has_report=False if no completed evaluation exists yet.
+    Return the latest completed evaluation report with full persisted details.
+
+    The frontend uses this to rehydrate progress UI after reopening a module.
     """
     try:
         await _require_owned_module(course_id, module_id, current_user)
@@ -927,9 +964,10 @@ async def course_completion_report(
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
     """
-    Get (or generate) the final course performance report.
-    Shows mastered skills, weak skills, mentor feedback, and next steps.
-    Call this when the course is fully completed.
+    Get or generate the final course performance report.
+
+    The report summarizes mastered skills, weak skills, mentor feedback, and
+    suggested next steps.
     """
     try:
         await _require_owned_course(course_id, current_user)
@@ -953,8 +991,7 @@ async def student_skills_categorized(
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
     """
-    Return student skills categorized into mastered / learning / weak.
-    Used for the My Skills tab.
+    Return student skills categorized into mastered, learning, and weak groups.
     """
     current_student_id = _require_matching_student(student_id, current_user)
     skills = await get_student_skills(current_student_id)
@@ -980,6 +1017,7 @@ async def my_progress(
     student_id: str | None = Query(default=None),
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Return dashboard progress for the authenticated student."""
     return await get_student_dashboard(_current_student_id(current_user))
 
 
@@ -988,6 +1026,7 @@ async def student_dashboard(
     student_id: str,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Return dashboard progress for a matching student id."""
     return await get_student_dashboard(_require_matching_student(student_id, current_user))
 
 
@@ -996,6 +1035,7 @@ async def student_skills(
     student_id: str,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Return skill graph data for a matching student id."""
     return await get_student_skills(_require_matching_student(student_id, current_user))
 
 
@@ -1004,6 +1044,7 @@ async def student_doubts(
     student_id: str,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Return saved doubt records for a matching student id."""
     return {
         "doubts": await get_student_doubts(
             _require_matching_student(student_id, current_user)
@@ -1016,6 +1057,7 @@ async def student_courses(
     student_id: str,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Return course summaries for a matching student id."""
     return {"courses": await list_courses(_require_matching_student(student_id, current_user))}
 
 
@@ -1024,15 +1066,16 @@ async def course_decision_log(
     course_id: str,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Return the saved agent decision log for a course."""
     await _require_owned_course(course_id, current_user)
     return {"decision_log": await get_course_decision_log(course_id)}
 
 
 @router.get("/debug/session/{session_id}/trace")
 async def debug_session_trace(session_id: str):
-    # The legacy trace endpoint lives at /session/trace/{session_id}. This
-    # frontend route documents the debug surface but avoids importing the
-    # in-memory session store across modules.
+    """Point frontend debug callers to the legacy in-memory session trace route."""
+    # The legacy trace endpoint owns the in-memory session store; this route
+    # avoids importing that store across routers.
     return {
         "session_id": session_id,
         "message": "Use /session/trace/{session_id} for active legacy sessions.",
@@ -1050,6 +1093,7 @@ async def stream_create_course(
     name: str = "Student",
     profile_json: str = "",
 ):
+    """Stream course creation events from query-string setup parameters."""
     profile: dict[str, Any] = {}
     if profile_json:
         try:
@@ -1068,6 +1112,7 @@ async def stream_create_course(
     ))
 
     async def events():
+        """Proxy generated course-creation events into the SSE response."""
         async for item in create_course_events(
                 student_id=_current_student_id(current_user),
                 topic=payload["topic"],
@@ -1091,11 +1136,13 @@ async def stream_create_course_job(
     job_id: str,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Stream course creation events for a previously registered creation job."""
     job = _course_creation_jobs.get(job_id)
     if not job or job.get("student_id") != _current_student_id(current_user):
         raise HTTPException(status_code=404, detail="course creation job not found")
 
     async def events():
+        """Stream a registered course-creation job and clear it afterward."""
         try:
             async for item in create_course_events(
                     student_id=job["student_id"],
@@ -1122,9 +1169,11 @@ async def stream_existing_course_create(
     course_id: str,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Replay existing course creation state as a stream for reconnecting clients."""
     await _require_owned_course(course_id, current_user)
 
     async def events():
+        """Replay saved course and module state for an existing course."""
         course = await get_course_for_student(course_id, _current_student_id(current_user))
         if not course:
             yield {"event": "error", "data": {"message": "Course not found"}}
@@ -1153,6 +1202,7 @@ async def stream_generate_module(
     student_id: str | None = Query(default=None),
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
+    """Stream module lesson generation events for one owned module."""
     await _require_owned_module(course_id, module_id, current_user)
     return StreamingResponse(
         _event_stream(

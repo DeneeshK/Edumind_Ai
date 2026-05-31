@@ -1,8 +1,11 @@
+"""Application settings loaded from environment variables and the local `.env` file."""
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _parse_origin_list(value: str | list[str] | tuple[str, ...] | None) -> list[str]:
+    """Return a de-duplicated list of CORS origins from string or sequence input."""
     if value is None:
         return []
     if isinstance(value, (list, tuple)):
@@ -26,6 +29,8 @@ def _parse_origin_list(value: str | list[str] | tuple[str, ...] | None) -> list[
 
 
 class Settings(BaseSettings):
+    """Typed runtime configuration for API keys, auth, storage, models, and evaluation."""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -47,6 +52,7 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
+        """Parse CORS_ORIGINS and reject wildcard origins in production."""
         origins = _parse_origin_list(self.cors_origins)
         env = (self.environment or "").strip().lower()
         if env in {"prod", "production"} and "*" in origins:

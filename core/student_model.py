@@ -19,6 +19,8 @@ from config import settings
 # ── Metacognition Profile ─────────────────────────────────────────────────────
 
 class MetacognitionProfile(BaseModel):
+    """Long-term learner adaptation signals used across sessions."""
+
     # Style evidence — {style_name: [depth_scores per session]}
     style_depth_scores: dict[str, list[float]] = Field(default_factory=dict)
     preferred_style: str = "formal"  # derived from style_depth_scores
@@ -81,6 +83,8 @@ class MetacognitionProfile(BaseModel):
 # ── Curriculum ────────────────────────────────────────────────────────────────
 
 class Module(BaseModel):
+    """One curriculum module planned by the curriculum architect."""
+
     id: str
     title: str
     concept: str
@@ -107,6 +111,8 @@ class Module(BaseModel):
 
 
 class IntentAnalysis(BaseModel):
+    """Structured interpretation of the learner's course request."""
+
     subject: str
     exact_subject: str
     target_context: str
@@ -121,12 +127,16 @@ class IntentAnalysis(BaseModel):
 
 
 class ResearchQuery(BaseModel):
+    """One research query used while planning a curriculum."""
+
     query: str
     category: str
     priority: int
 
 
 class ResearchSummary(BaseModel):
+    """Aggregated research evidence collected for curriculum planning."""
+
     queries_run: list[ResearchQuery] = Field(default_factory=list)
     raw_results: dict[str, str] = Field(default_factory=dict)
     summary_by_category: dict[str, str] = Field(default_factory=dict)
@@ -135,6 +145,8 @@ class ResearchSummary(BaseModel):
 
 
 class RoadmapStep(BaseModel):
+    """High-level roadmap step used to derive one or more curriculum modules."""
+
     step_id: str
     title: str
     concept_cluster: str
@@ -161,6 +173,8 @@ class RoadmapStep(BaseModel):
 
 
 class MasterRoadmap(BaseModel):
+    """Full course roadmap generated before module-level expansion."""
+
     course_id: str = ""
     topic: str
     goal: str
@@ -172,6 +186,8 @@ class MasterRoadmap(BaseModel):
 
 
 class CurriculumDecisionLog(BaseModel):
+    """Audit payload describing major curriculum-planning decisions."""
+
     course_id: str
     intent_analysis: dict[str, Any] = Field(default_factory=dict)
     research_summary: dict[str, Any] = Field(default_factory=dict)
@@ -183,6 +199,8 @@ class CurriculumDecisionLog(BaseModel):
 
 
 class CurriculumPlan(BaseModel):
+    """Persisted curriculum plan with ordered modules and planning metadata."""
+
     topic: str
     domain: str
     goal: str
@@ -202,6 +220,8 @@ class CurriculumPlan(BaseModel):
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
 class EvaluationReport(BaseModel):
+    """Structured result of evaluating a learner on one concept."""
+
     concept: str
     session_id: str
     correctness_score: float      # 0.0–1.0
@@ -223,6 +243,8 @@ class EvaluationReport(BaseModel):
 # ── Adaptation ────────────────────────────────────────────────────────────────
 
 class AdaptationDecision(BaseModel):
+    """Decision emitted by the adaptation engine after evaluation."""
+
     action: str
     reason: str
     agent: str = "adaptation_engine"        # which agent made this decision
@@ -234,6 +256,8 @@ class AdaptationDecision(BaseModel):
 # ── Student State ─────────────────────────────────────────────────────────────
 
 class StudentState(BaseModel):
+    """Mutable learner state used by legacy sessions and agent orchestration."""
+
     # Identity
     student_id: str
     name: str = ""
@@ -276,6 +300,7 @@ class StudentState(BaseModel):
     # ── Pace threshold ────────────────────────────────────────────────────────
     @property
     def advance_threshold(self) -> float:
+        """Return the mastery threshold required to advance at the current pace."""
         return {
             "fast": settings.mastery_threshold_fast,
             "medium": settings.mastery_threshold_medium,
@@ -285,14 +310,17 @@ class StudentState(BaseModel):
     # ── Dirty tracking ────────────────────────────────────────────────────────
 
     def mark_dirty(self, field: str) -> None:
+        """Mark a state field as changed during the current session."""
         self._dirty.add(field)
 
     def clear_dirty(self) -> None:
+        """Clear all dirty markers after persistence."""
         self._dirty.clear()
 
     # ── Knowledge updates ────────────────────────────────────────────────────
 
     def update_mastery(self, concept: str, correctness: float, depth: float) -> None:
+        """Update mastery and depth scores for one concept."""
         # Safety floor on depth prevents zero-division in derived calculations
         # and ensures mastery never collapses to correctness-only silently
         safe_depth = max(0.001, depth)
@@ -302,14 +330,17 @@ class StudentState(BaseModel):
         self.mark_dirty("concept_mastery")
 
     def get_mastery(self, concept: str) -> float:
+        """Return the stored mastery score for a concept, defaulting to zero."""
         return self.concept_mastery.get(concept, 0.0)
 
     def ready_to_advance(self, concept: str) -> bool:
+        """Return whether concept mastery meets the current pace threshold."""
         return self.get_mastery(concept) >= self.advance_threshold
 
     # ── Doubt tracking ───────────────────────────────────────────────────────
 
     def log_doubt(self, concept: str, doubt_type: str = "general") -> None:
+        """Record one doubt event in the session-scoped doubt counters."""
         doubt_type = (doubt_type or "general").strip() or "general"
         self.session_doubt_counts[concept] = (
             self.session_doubt_counts.get(concept, 0) + 1
@@ -322,6 +353,7 @@ class StudentState(BaseModel):
         self.mark_dirty("session_doubt_counts")
 
     def get_doubt_count(self, concept: str) -> int:
+        """Return the number of doubts logged for one concept this session."""
         return self.session_doubt_counts.get(concept, 0)
 
     # ── Module content tracking ──────────────────────────────────────────────
@@ -361,6 +393,7 @@ class StudentState(BaseModel):
         return self.session_id
 
     def add_decision(self, decision: AdaptationDecision) -> None:
+        """Append an agent decision to the current session log."""
         self.session_decisions.append(decision)
 
     # ── Persistence ──────────────────────────────────────────────────────────

@@ -152,6 +152,8 @@ def _build_student_context_block(topic: str, profile: dict) -> str:
 
 
 class CurriculumArchitectAgent(BaseAgent):
+    """Builds curriculum coverage, sequencing, roadmap, and validation artifacts."""
+
     NAME = "curriculum_architect"
     TERMINAL_TOOL = "submit_curriculum"
 
@@ -563,6 +565,13 @@ CHECK 2 RULES — flag these structural issues:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _structural_fix(self, modules: list[dict]) -> list[dict]:
+        """
+        Normalize raw module dictionaries before typed model construction.
+
+        The LLM may omit ids, mix scalar/list fields, or emit question-like
+        scope entries. This pass gives downstream validators a consistent shape
+        without changing the intended concept order.
+        """
         seen_ids: set[str] = set()
         result: list[dict] = []
         step_counter = 1
@@ -616,6 +625,7 @@ CHECK 2 RULES — flag these structural issues:
         return result
 
     def _deduplicate_concepts(self, modules: list[dict]) -> list[dict]:
+        """Remove exact repeated concepts while preserving first occurrence order."""
         seen: dict[str, int] = {}
         result: list[dict] = []
         for m in modules:
@@ -633,6 +643,7 @@ CHECK 2 RULES — flag these structural issues:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _safe_int(self, value: Any, fallback: int) -> int:
+        """Parse an integer estimate from raw LLM output with a fallback."""
         try:
             return int(value)
         except (TypeError, ValueError):
@@ -640,6 +651,7 @@ CHECK 2 RULES — flag these structural issues:
             return int(m.group(0)) if m else fallback
 
     def _build_module_objects(self, raw_modules: list[dict], depth_level: str) -> list[Module]:
+        """Convert normalized module dictionaries into typed Module objects."""
         pace_ranges = {"fast": (10, 25), "medium": (20, 40), "deep": (30, 60)}
         min_min, max_min = pace_ranges.get(self.state.pace, (20, 40))
         result: list[Module] = []
@@ -700,6 +712,7 @@ CHECK 2 RULES — flag these structural issues:
         profile: dict,
         rationale: str,
     ) -> MasterRoadmap:
+        """Build the persisted master roadmap from finalized module objects."""
         # Use a stub ResearchSummary — no Tavily data.
         research_summary = _empty_research(topic)
 
@@ -753,6 +766,7 @@ CHECK 2 RULES — flag these structural issues:
         )
 
     def _build_scope_from_modules(self, modules: list[Module], topic: str, profile: dict) -> CourseScopeAnalysis:
+        """Derive scope metadata from the module plan when modules drive the roadmap."""
         intent = profile.get("current_intent") if isinstance(profile.get("current_intent"), dict) else {}
         pace = str(profile.get("pace") or self.state.pace or "medium")
         level = str(profile.get("learner_level") or intent.get("learner_level") or "beginner")
@@ -782,6 +796,7 @@ CHECK 2 RULES — flag these structural issues:
         )
 
     def _compress_mastered(self, modules: list[Module]) -> list[Module]:
+        """Drop modules for trusted known concepts only when mastery clears threshold."""
         if not modules:
             return modules
         trusted = {
@@ -812,6 +827,7 @@ CHECK 2 RULES — flag these structural issues:
         topic: str,
         profile: dict,
     ) -> list[dict]:
+        """Ask the reasoning model for a targeted repair of validator issues."""
         student_ctx = _build_student_context_block(topic, profile)
         system = """You are EduMind's curriculum repair agent.
 Fix ONLY the listed issues. Preserve all valid modules.
@@ -852,6 +868,13 @@ Return STRICT JSON only: {"modules": [...], "repair_rationale": "..."}"""
     # ─────────────────────────────────────────────────────────────────────────
 
     async def build_curriculum(self, topic: str, profile: dict[str, Any] | None = None) -> CurriculumPlan:
+        """
+        Build, validate, repair, persist, and return a CurriculumPlan.
+
+        The planner uses a coverage-first LLM call, a sequencing LLM call,
+        deterministic cleanup, validation, optional repair, and final typed
+        conversion before saving the curriculum for the student.
+        """
         pace = self.state.pace if self.state.pace in ("fast", "medium", "deep") else "medium"
         depth_level = {"fast": "surface", "medium": "standard", "deep": "deep"}[pace]
         profile = dict(profile or getattr(self, "personalization_profile", {}) or {})

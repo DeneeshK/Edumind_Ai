@@ -171,6 +171,14 @@ UNRELIABLE_GENERATED_CONCEPT_PATTERNS = PLACEHOLDER_TITLE_PATTERNS + [
 
 @dataclass
 class CourseScopeAnalysis:
+    """
+    Structured scope contract produced before module planning.
+
+    Curriculum generation uses this object to keep the requested subject,
+    learner level, module-count target, exclusions, and roadmap strategy
+    aligned across the roadmap, module plan, and validator stages.
+    """
+
     requested_subject: str = ""
     actual_course_focus: str = ""
     learner_level: str = ""
@@ -204,11 +212,19 @@ class CourseScopeAnalysis:
     estimated_total_hours: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a plain dictionary suitable for JSON prompts and persistence."""
         return asdict(self)
 
 
 def parse_json_object(text: str) -> dict[str, Any]:
-    """Parse a JSON object, tolerating fenced markdown around it."""
+    """
+    Parse a JSON object from model output.
+
+    The planner and evaluator prompts ask for strict JSON, but model output may
+    still arrive wrapped in markdown fences or surrounding prose. This helper
+    extracts only an object payload and returns an empty dict when recovery is
+    not possible.
+    """
     raw = (text or "").strip()
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?", "", raw, flags=re.I).strip()
@@ -228,6 +244,7 @@ def parse_json_object(text: str) -> dict[str, Any]:
 
 
 def clean_text(value: Any) -> str:
+    """Collapse whitespace and coerce optional values into comparable text."""
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
@@ -244,6 +261,7 @@ QUESTION_LIKE_SCOPE_PREFIXES = (
 
 
 def is_question_like_scope_text(value: Any) -> bool:
+    """Return whether a scope entry looks like a user question instead of a concept."""
     text = clean_text(value).lower()
     if not text:
         return False
@@ -251,6 +269,7 @@ def is_question_like_scope_text(value: Any) -> bool:
 
 
 def _normalise_word(word: str) -> str:
+    """Normalize simple English plural forms for concept matching."""
     clean = word.lower().strip()
     if len(clean) > 4 and clean.endswith("ies"):
         return clean[:-3] + "y"
@@ -262,6 +281,7 @@ def _normalise_word(word: str) -> str:
 
 
 def _raw_token_set(value: Any) -> set[str]:
+    """Return significant normalized tokens after stopword removal."""
     text = clean_text(value).lower()
     words = re.findall(r"[a-zA-Z][a-zA-Z0-9+#.-]*", text)
     return {
@@ -272,6 +292,7 @@ def _raw_token_set(value: Any) -> set[str]:
 
 
 def _normalised_phrase(value: Any) -> str:
+    """Return a normalized phrase used for fuzzy concept comparisons."""
     tokens = _raw_token_set(value)
     if not tokens:
         return ""
@@ -285,6 +306,7 @@ def _normalised_phrase(value: Any) -> str:
 
 
 def _concept_semantic_keys(value: Any) -> set[str]:
+    """Map aliases such as 'if statements' and 'conditionals' to semantic keys."""
     phrase = _normalised_phrase(value)
     tokens = set(phrase.split())
     if not tokens:
@@ -310,6 +332,7 @@ def _concept_semantic_keys(value: Any) -> set[str]:
 
 
 def token_set(value: Any) -> set[str]:
+    """Return tokens enriched with semantic aliases for concept comparison."""
     tokens = _raw_token_set(value)
     for semantic_key in _concept_semantic_keys(value):
         tokens.add(semantic_key)
@@ -319,6 +342,7 @@ def token_set(value: Any) -> set[str]:
 
 
 def _construct_pattern_groups(concept: Any) -> list[list[str]]:
+    """Build stricter regex groups for syntax-like programming concepts."""
     clean = clean_text(concept).lower()
     groups: list[list[str]] = []
     if re.search(r"\bfor[\s-]+loops?\b", clean):
@@ -340,7 +364,13 @@ def _construct_pattern_groups(concept: Any) -> list[list[str]]:
 
 
 def concept_appears_in_text(text: Any, concept: Any) -> bool:
-    """Return True when a lesson/question actually mentions a planned concept."""
+    """
+    Return whether lesson or question text covers a planned concept.
+
+    For syntax-like programming concepts, the match requires concrete evidence
+    such as loop or conditional syntax. For other concepts, the function falls
+    back to exact terms, semantic aliases, and token overlap.
+    """
     text_clean = clean_text(text).lower()
     concept_clean = clean_text(concept).lower()
     if not text_clean or not concept_clean:
@@ -365,6 +395,7 @@ def concept_appears_in_text(text: Any, concept: Any) -> bool:
 
 
 def is_garbage_topic(topic: Any) -> bool:
+    """Reject confirmation-like text that should not become a course topic."""
     clean = clean_text(topic).lower().strip(" .,!?:;")
     if not clean:
         return True
@@ -374,6 +405,7 @@ def is_garbage_topic(topic: Any) -> bool:
 
 
 def profile_keywords(profile: dict[str, Any]) -> set[str]:
+    """Collect profile tokens used to judge whether history is relevant."""
     fields = [
         profile.get("topic"),
         profile.get("exact_subject"),
@@ -390,6 +422,7 @@ def profile_keywords(profile: dict[str, Any]) -> set[str]:
 
 
 def is_related_to_profile(concept: Any, profile: dict[str, Any]) -> bool:
+    """Return whether a concept belongs to the current course intent."""
     concept_tokens = token_set(concept)
     if not concept_tokens:
         return False
@@ -411,6 +444,7 @@ def is_related_to_profile(concept: Any, profile: dict[str, Any]) -> bool:
 
 
 def _extract_concepts(items: list[Any] | None) -> list[str]:
+    """Extract concept names from mixed history rows and plain strings."""
     concepts: list[str] = []
     seen: set[str] = set()
     for item in items or []:
@@ -427,6 +461,7 @@ def _extract_concepts(items: list[Any] | None) -> list[str]:
 
 
 def _dedupe_text(items: list[Any]) -> list[str]:
+    """Return unique cleaned strings while preserving input order."""
     result: list[str] = []
     seen: set[str] = set()
     for item in items:
@@ -439,6 +474,7 @@ def _dedupe_text(items: list[Any]) -> list[str]:
 
 
 def _concept_from_history_item(item: Any) -> str:
+    """Read a concept-like label from a stored history item."""
     if isinstance(item, dict):
         return clean_text(
             item.get("concept")
@@ -450,6 +486,7 @@ def _concept_from_history_item(item: Any) -> str:
 
 
 def _history_item_score(item: Any) -> float | None:
+    """Return a numeric mastery-like score from a history item when available."""
     if not isinstance(item, dict):
         return None
     for key in ("mastery_score", "score", "confidence", "proficiency"):
@@ -463,6 +500,7 @@ def _history_item_score(item: Any) -> float | None:
 
 
 def _history_item_verified(item: Any) -> bool:
+    """Return whether a history item is strong enough to count as mastery."""
     if not isinstance(item, dict):
         return True
     score = _history_item_score(item)
@@ -482,6 +520,7 @@ def _history_item_verified(item: Any) -> bool:
 
 
 def is_unreliable_generated_concept(value: Any) -> bool:
+    """Detect placeholder/generated labels that should not be trusted as concepts."""
     text = clean_text(value).lower()
     if not text:
         return False
@@ -489,6 +528,7 @@ def is_unreliable_generated_concept(value: Any) -> bool:
 
 
 def profile_has_no_prior_experience(profile: dict[str, Any]) -> bool:
+    """Return whether the learner explicitly described having no prior experience."""
     current_intent = profile.get("current_intent") if isinstance(profile.get("current_intent"), dict) else {}
     text = " ".join(
         clean_text(value).lower()
@@ -534,6 +574,7 @@ def filter_relevant_student_history(
     courses: list[str] = []
 
     def add_bucket(bucket: list[dict[str, Any]], concept: str, source: str, reason: str) -> None:
+        """Append a concept classification with source and reason metadata."""
         bucket.append({"concept": concept, "source": source, "reason": reason})
 
     for item in history.get("mastered_concepts") or []:
@@ -624,6 +665,7 @@ def relevant_history_concepts(
     profile: dict[str, Any],
     student_history: dict[str, Any] | None,
 ) -> dict[str, list[str]]:
+    """Summarize relevant and unrelated history concepts for planning context."""
     history = student_history or {}
     mastered = _extract_concepts(history.get("mastered_concepts"))
     weak = _extract_concepts(history.get("weak_concepts"))
@@ -637,7 +679,13 @@ def relevant_history_concepts(
 
 
 def fallback_scope_analysis(profile: dict[str, Any]) -> CourseScopeAnalysis:
-    """Provider-failure fallback. The LLM path is the primary source of scope."""
+    """
+    Build a conservative scope analysis when the LLM scope call is unavailable.
+
+    The fallback estimates breadth from the requested topic, goal, depth, pace,
+    and learner level. It is intentionally generic and keeps unrelated branches
+    out of beginner plans until the normal LLM planning path is available.
+    """
     topic = clean_text(profile.get("topic") or profile.get("exact_subject"))
     goal = clean_text(profile.get("learning_goal") or profile.get("target_context"))
     depth = clean_text(profile.get("depth_preference") or profile.get("pace")).lower()
@@ -729,6 +777,7 @@ def fallback_scope_analysis(profile: dict[str, Any]) -> CourseScopeAnalysis:
 
 
 def _module_text(module: Any) -> str:
+    """Flatten module fields into text for drift and contamination checks."""
     if hasattr(module, "model_dump"):
         module = module.model_dump()
     if not isinstance(module, dict):
@@ -746,6 +795,7 @@ def _module_text(module: Any) -> str:
 
 
 def contamination_terms(profile: dict[str, Any], student_history: dict[str, Any] | None) -> list[str]:
+    """Return unrelated prior-course terms that should not leak into a new plan."""
     history = relevant_history_concepts(profile, student_history)
     terms = history["unrelated_previous_topics"]
     explicit_known = set(clean_text(c).lower() for c in profile.get("known_concepts") or [])
@@ -753,16 +803,19 @@ def contamination_terms(profile: dict[str, Any], student_history: dict[str, Any]
 
 
 def _as_module_dict(module: Any) -> dict[str, Any]:
+    """Convert Pydantic module objects or dict-like modules into dictionaries."""
     if hasattr(module, "model_dump"):
         module = module.model_dump()
     return dict(module) if isinstance(module, dict) else {}
 
 
 def _concept_key(value: Any) -> str:
+    """Return the normalized comparison key for a concept label."""
     return _normalised_phrase(value)
 
 
 def _concept_list(values: Any) -> list[str]:
+    """Normalize a list of concept labels into unique cleaned strings."""
     if not isinstance(values, list):
         return []
     result: list[str] = []
@@ -777,11 +830,13 @@ def _concept_list(values: Any) -> list[str]:
 
 
 def _looks_like_module_reference(value: Any) -> bool:
+    """Return whether a dependency value is only a module id/reference."""
     text = clean_text(value).lower()
     return bool(re.fullmatch(r"(m|module)[\s_-]*\d+[a-z]?", text))
 
 
 def _concepts_match(left: Any, right: Any) -> bool:
+    """Return whether two concept labels refer to the same practical concept."""
     a = _concept_key(left)
     b = _concept_key(right)
     if not a or not b:
@@ -809,6 +864,7 @@ def _concepts_match(left: Any, right: Any) -> bool:
 
 
 def _concept_in_list(concept: Any, candidates: list[str]) -> bool:
+    """Return whether a concept is represented by a list of candidate labels."""
     clean_candidates = [clean_text(candidate) for candidate in candidates if clean_text(candidate)]
     if any(_concepts_match(concept, candidate) for candidate in clean_candidates):
         return True
@@ -835,6 +891,7 @@ def _concept_in_list(concept: Any, candidates: list[str]) -> bool:
 
 
 def _contains_term(text: str, term: str) -> bool:
+    """Return whether text contains a term, including known exclusion variants."""
     term_clean = clean_text(term).lower()
     if not term_clean:
         return False
@@ -854,11 +911,13 @@ def _contains_term(text: str, term: str) -> bool:
 
 
 def has_placeholder_title(title: Any) -> bool:
+    """Detect generic module titles that should be repaired before saving."""
     text = clean_text(title).lower()
     return any(re.search(pattern, text, flags=re.I) for pattern in PLACEHOLDER_TITLE_PATTERNS)
 
 
 def _module_taught_concepts(data: dict[str, Any]) -> list[str]:
+    """Return the concepts a module claims to teach, with sensible fallbacks."""
     taught = _concept_list(data.get("concepts_taught"))
     if taught:
         return taught
@@ -870,6 +929,7 @@ def _module_taught_concepts(data: dict[str, Any]) -> list[str]:
 
 
 def _module_dependencies(data: dict[str, Any]) -> list[str]:
+    """Return prerequisite/dependency concepts for a module dictionary."""
     dependencies = _concept_list(data.get("depends_on_concepts"))
     if dependencies:
         return dependencies
@@ -877,6 +937,7 @@ def _module_dependencies(data: dict[str, Any]) -> list[str]:
 
 
 def _module_question_scope(data: dict[str, Any]) -> list[str]:
+    """Return concepts that generated checks may test for a module."""
     scope = _concept_list(data.get("question_scope"))
     if scope:
         return scope
@@ -884,6 +945,7 @@ def _module_question_scope(data: dict[str, Any]) -> list[str]:
 
 
 def _scope_dict(scope_analysis: dict[str, Any] | CourseScopeAnalysis) -> dict[str, Any]:
+    """Convert scope analysis objects into dictionaries for validators."""
     return (
         scope_analysis.to_dict()
         if isinstance(scope_analysis, CourseScopeAnalysis)
@@ -892,6 +954,7 @@ def _scope_dict(scope_analysis: dict[str, Any] | CourseScopeAnalysis) -> dict[st
 
 
 def _scope_exclusions(scope: dict[str, Any]) -> list[str]:
+    """Return explicit exclusions and drift-risk terms from scope analysis."""
     exclusions: list[str] = []
     for field_name in (
         "what_to_exclude",
@@ -902,6 +965,7 @@ def _scope_exclusions(scope: dict[str, Any]) -> list[str]:
 
 
 def _profile_exclusions(profile: dict[str, Any] | None) -> list[str]:
+    """Return explicit exclusions supplied by the learner profile."""
     profile = profile or {}
     exclusions: list[str] = []
     for field_name in ("do_not_include", "should_skip"):
@@ -910,14 +974,17 @@ def _profile_exclusions(profile: dict[str, Any] | None) -> list[str]:
 
 
 def _combined_exclusions(scope: dict[str, Any], profile: dict[str, Any] | None = None) -> list[str]:
+    """Merge scope and profile exclusions without duplicates."""
     return list(dict.fromkeys(_scope_exclusions(scope) + _profile_exclusions(profile)))
 
 
 def _recommended_module_count(scope: dict[str, Any]) -> int:
+    """Return the final module-count target from scope metadata."""
     return int(scope.get("final_module_count_target") or scope.get("recommended_module_count") or 0)
 
 
 def _is_beginner(profile: dict[str, Any], scope: dict[str, Any]) -> bool:
+    """Infer whether the validated plan is for a beginner learner."""
     text = " ".join(
         clean_text(value).lower()
         for value in (
@@ -931,6 +998,7 @@ def _is_beginner(profile: dict[str, Any], scope: dict[str, Any]) -> bool:
 
 
 def _repair_prompt(issues: list[str]) -> str:
+    """Build a targeted repair instruction from deterministic validator issues."""
     if not issues:
         return ""
     return (
@@ -942,6 +1010,7 @@ def _repair_prompt(issues: list[str]) -> str:
 
 
 def _roadmap_step_dicts(roadmap: Any) -> list[dict[str, Any]]:
+    """Extract roadmap steps from dict or Pydantic-style roadmap objects."""
     if hasattr(roadmap, "model_dump"):
         roadmap = roadmap.model_dump()
     if not isinstance(roadmap, dict):
@@ -962,9 +1031,14 @@ def validate_master_roadmap(
     profile: dict,
 ) -> dict:
     """
-    Deterministic validation for the roadmap-first planning layer.
+    Validate the roadmap-first planning layer before modules are trusted.
 
-    Returns {"passed": bool, "issues": list[str], "repair_prompt": str}.
+    Checks include required step fields, duplicate clusters, excluded concept
+    drift, realistic estimates, and prerequisite ordering between roadmap
+    steps.
+
+    Returns:
+        Dict with `passed`, `issues`, and a targeted `repair_prompt`.
     """
     issues: list[str] = []
     steps = _roadmap_step_dicts(roadmap)
@@ -1059,9 +1133,15 @@ def validate_modules_against_roadmap(
     profile: dict,
 ) -> dict:
     """
-    Deterministic validation that module plans are derived from master steps.
+    Validate module plans against roadmap and scope constraints.
 
-    Returns {"passed": bool, "issues": list[str], "repair_prompt": str}.
+    The current architecture often builds the roadmap from modules, so roadmap
+    step ids are tracked when present but not required. The important checks are
+    concept drift, module-id dependencies, question-scope hygiene, and coverage
+    of explicit roadmap concepts when a pre-built roadmap exists.
+
+    Returns:
+        Dict with `passed`, `issues`, and a targeted `repair_prompt`.
     """
     issues: list[str] = []
     steps = _roadmap_step_dicts(roadmap)
@@ -1171,6 +1251,19 @@ def validate_curriculum_quality(
     roadmap_steps: list[str] | None = None,
     schedule: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """
+    Run deterministic quality gates over a generated curriculum.
+
+    This validator protects the persisted course plan from common LLM failure
+    modes: garbage topics, unrelated prior-course contamination, missing module
+    metadata, prerequisite order mistakes, vague question scope, excluded-topic
+    drift, duplicate concepts, weak roadmap explanations, and unrealistic
+    schedules.
+
+    Returns:
+        Dict with pass/fail status, quality score, issues, repair prompt, and
+        regeneration flags consumed by the curriculum architect.
+    """
     issues: list[str] = []
     topic_clean = clean_text(topic or profile.get("topic"))
     topic_tokens = token_set(topic_clean) | token_set(profile.get("exact_subject"))
@@ -1417,6 +1510,15 @@ def validate_lesson_quality(
     module: dict[str, Any],
     context_chunks: list[str] | None = None,
 ) -> dict[str, Any]:
+    """
+    Validate generated lesson markdown before it is saved for a module.
+
+    The checks are intentionally conservative. They catch clearly unusable
+    lessons such as empty/truncated content, missing module concepts, generic
+    scaffolding, programming lessons without code, and drift into excluded
+    topics. Validation issues feed the retry prompt but do not permanently
+    block delivery when the retry also fails.
+    """
     issues: list[str] = []
     text = clean_text(content).lower()
     topic = clean_text(course.get("topic"))
@@ -1494,6 +1596,7 @@ def validate_lesson_quality(
 
 
 def lesson_section_titles(content: str) -> set[str]:
+    """Return markdown heading titles present in a generated lesson."""
     titles = {"Lesson"}
     for line in (content or "").splitlines():
         match = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*$", line)
@@ -1509,6 +1612,14 @@ def validate_questions_grounded(
     lesson_text: str,
     module: dict[str, Any],
 ) -> dict[str, Any]:
+    """
+    Validate that generated check questions are answerable from the lesson.
+
+    Each question must declare tested concepts within module scope, cite an
+    existing lesson section, and ground its expected answer in either a direct
+    source quote or lesson text. This prevents post-lesson checks from testing
+    concepts the lesson never taught.
+    """
     issues: list[str] = []
     lesson_clean = clean_text(lesson_text)
     lesson_lower = lesson_clean.lower()

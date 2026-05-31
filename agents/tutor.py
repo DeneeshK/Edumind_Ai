@@ -34,6 +34,14 @@ CHECKPOINT_MARKER = "### ✏️ Think Moment"
 
 
 class TutorAgent(BaseAgent):
+    """
+    Run the legacy interactive tutoring flow for one curriculum module.
+
+    The tutor retrieves optional context, delivers a structured lesson, captures
+    checkpoint/practice responses, records delivered content for later grounded
+    evaluation, and logs student doubts for adaptation.
+    """
+
     NAME = "tutor_agent"
     TERMINAL_TOOL = "finish_lesson"
 
@@ -43,9 +51,11 @@ class TutorAgent(BaseAgent):
         self._delivered_lesson = False
 
         async def _default_emit(text: str) -> None:
+            """Emit tutor text in legacy CLI mode."""
             print(text, flush=True)
 
         async def _default_ask(question: str, **kw) -> str:
+            """Ask a tutor prompt in legacy CLI mode."""
             print(question, flush=True)
             return input("> ").strip()
 
@@ -56,6 +66,7 @@ class TutorAgent(BaseAgent):
     # ── Tool definitions ───────────────────────────────────────────────────────
 
     def _build_tools(self) -> list[dict]:
+        """Build Groq tool schemas used by the tutor agent loop."""
         return [
             self.build_tool(
                 name="retrieve_content",
@@ -142,11 +153,13 @@ class TutorAgent(BaseAgent):
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     async def _emit_block(self, text: str) -> None:
+        """Emit a visually separated block through the active output channel."""
         await self._emit("\n" + "━" * 60)
         await self._emit(text)
         await self._emit("━" * 60 + "\n")
 
     def _classify_doubt_type(self, doubt_text: str, module) -> str:
+        """Classify a student doubt so later adaptation can use the signal."""
         text = doubt_text.lower()
         prereqs = " ".join(module.prerequisites).lower() if module else ""
         if any(w in text for w in ("example", "apply", "use case", "how do i", "real world")):
@@ -158,6 +171,7 @@ class TutorAgent(BaseAgent):
         return "general"
 
     async def _answer_doubt(self, doubt_text: str, module, doubt_type: str) -> str:
+        """Generate a short mid-lesson answer for a captured doubt."""
         concept = module.concept if module else "the concept"
         try:
             from clients.groq_client import generate
@@ -179,6 +193,7 @@ class TutorAgent(BaseAgent):
             )
 
     async def _capture_doubt(self, module) -> int:
+        """Ask for one optional doubt, answer it, and record it in session state."""
         doubt = await self._ask("❓ Any questions? (press Enter to skip)")
         if not doubt.strip():
             return 0
@@ -252,6 +267,7 @@ class TutorAgent(BaseAgent):
     # ── Fallback lesson when LLM fails ─────────────────────────────────────────
 
     def _fallback_lesson_text(self, module) -> str:
+        """Return deterministic lesson markdown when LLM lesson delivery fails."""
         prereqs = ", ".join(module.prerequisites) if module.prerequisites else "none"
         domain = self.state.domain or "your field"
         goal = self.state.goal or "mastering this subject"
@@ -631,6 +647,7 @@ You've built the foundation. The next module will take this further — you'll s
     # ── Tool executor ──────────────────────────────────────────────────────────
 
     async def _execute_tool(self, tool_name: str, args: dict) -> str:
+        """Run tutor tool calls that retrieve context, deliver lessons, or handle doubts."""
         if tool_name == "retrieve_content":
             chunks = await retrieve(
                 query=args.get("query", args.get("concept", "")),
@@ -736,6 +753,7 @@ You've built the foundation. The next module will take this further — you'll s
     # ── System prompt builder ──────────────────────────────────────────────────
 
     def _build_system_prompt(self, module, style: str, prior_doubts: int) -> str:
+        """Build the detailed teaching prompt for the current module and learner state."""
         prereqs = ", ".join(module.prerequisites) if module.prerequisites else "none"
         meta = self.state.metacognition
 

@@ -23,6 +23,7 @@ from loguru import logger
 
 
 async def main():
+    """Run the legacy command-line learning session entry point."""
     parser = argparse.ArgumentParser(description="EduMind Adaptive Learning System")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--new", action="store_true", help="Start as new student")

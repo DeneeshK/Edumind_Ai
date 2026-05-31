@@ -33,13 +33,17 @@ _SKIP_PATHS = {"/metrics", "/health", "/favicon.ico"}
 
 
 def _normalise(path: str) -> str:
+    """Collapse dynamic API path segments to low-cardinality metric labels."""
     for pattern, replacement in _PATH_PATTERNS:
         path = pattern.sub(replacement, path)
     return path
 
 
 class PrometheusMiddleware(BaseHTTPMiddleware):
+    """Record request count and latency metrics for each non-skipped HTTP request."""
+
     async def dispatch(self, request: Request, call_next) -> Response:
+        """Measure one request/response cycle and update Prometheus metrics."""
         path = request.url.path
         if path in _SKIP_PATHS:
             return await call_next(request)

@@ -1,3 +1,5 @@
+"""Authenticated API routes for reading stored evaluation reports and metrics."""
+
 from __future__ import annotations
 
 import json
@@ -12,6 +14,7 @@ router = APIRouter(prefix="/eval", tags=["evaluation"])
 
 
 def _decode_json(value: Any) -> Any:
+    """Decode JSON strings from asyncpg rows when possible."""
     if isinstance(value, str):
         try:
             return json.loads(value)
@@ -21,6 +24,7 @@ def _decode_json(value: Any) -> Any:
 
 
 def _row_to_dict(row) -> dict:
+    """Convert an asyncpg row into a JSON-ready dictionary."""
     data = dict(row)
     for key in ("details_json", "full_report_json", "modules_covered", "raw_json"):
         if key in data:
@@ -84,7 +88,7 @@ async def list_metrics(
 
 @router.get("/aggregated")
 async def get_aggregated_reports(period_type: str = Query("weekly")):
-    """Return recent aggregated reports."""
+    """Return recent weekly or monthly evaluation aggregate reports."""
     async with get_conn() as conn:
         rows = await conn.fetch(
             """

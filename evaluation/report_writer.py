@@ -1,3 +1,5 @@
+"""TXT report writer for already-calculated evaluation metrics."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -12,6 +14,7 @@ INTERPRETATION_LIMIT = 280
 
 
 def _as_entries(value: Any) -> list[Any]:
+    """Normalize a scalar metric entry or list of entries."""
     if value is None:
         return []
     if isinstance(value, list):
@@ -20,6 +23,7 @@ def _as_entries(value: Any) -> list[Any]:
 
 
 def _nested_get(value: Any, path: tuple[str, ...]) -> Any:
+    """Read a nested dictionary path, returning None when unavailable."""
     current = value
     for key in path:
         if not isinstance(current, dict) or key not in current:
@@ -29,6 +33,7 @@ def _nested_get(value: Any, path: tuple[str, ...]) -> Any:
 
 
 def _payload_sources(metrics: dict) -> list[dict]:
+    """Return metric payload dictionaries that may contain report values."""
     sources = [metrics]
     for key in (
         "calculated_metrics",
@@ -47,6 +52,7 @@ def _payload_sources(metrics: dict) -> list[dict]:
 
 
 def _find_entries(metrics: dict, aliases: tuple[str, ...]) -> list[Any]:
+    """Find metric entries by checking all supported alias names."""
     for source in _payload_sources(metrics):
         for alias in aliases:
             if alias in source:
@@ -55,6 +61,7 @@ def _find_entries(metrics: dict, aliases: tuple[str, ...]) -> list[Any]:
 
 
 def _score_value(entry: Any) -> Any:
+    """Extract the numeric metric value from a supported entry shape."""
     if isinstance(entry, dict):
         if entry.get("status") == "not_available":
             return None
@@ -66,6 +73,7 @@ def _score_value(entry: Any) -> Any:
 
 
 def _format_value(value: Any) -> str:
+    """Format a metric value for stable plain-text report output."""
     if value is None:
         return NOT_AVAILABLE
     if isinstance(value, float):
@@ -74,6 +82,7 @@ def _format_value(value: Any) -> str:
 
 
 def _raw_interpretation(entry: Any) -> str | None:
+    """Return the first explanatory note found in a metric entry."""
     if not isinstance(entry, dict):
         return None
     details = entry.get("details")
@@ -95,6 +104,7 @@ def _raw_interpretation(entry: Any) -> str | None:
 
 
 def _shorten(value: str, limit: int = INTERPRETATION_LIMIT) -> str:
+    """Collapse whitespace and truncate long notes without cutting mid-word."""
     clean = " ".join(str(value).split())
     if len(clean) <= limit:
         return clean
@@ -107,6 +117,7 @@ def _shorten(value: str, limit: int = INTERPRETATION_LIMIT) -> str:
 
 
 def _score_is_zero(entry: dict) -> bool:
+    """Return whether an entry carries an explicit zero score."""
     for key in ("score", "value", "metric_value"):
         if key not in entry:
             continue
@@ -118,6 +129,7 @@ def _score_is_zero(entry: dict) -> bool:
 
 
 def _availability_reason_from_text(text: str | None) -> str | None:
+    """Map raw metric notes into concise not-available explanations."""
     if not text:
         return None
     lowered = text.lower()
@@ -141,6 +153,7 @@ def _availability_reason_from_text(text: str | None) -> str | None:
 
 
 def _not_available_reason(entry: Any) -> str | None:
+    """Return a human-readable reason when a metric entry is unavailable."""
     if not isinstance(entry, dict):
         return None
     if entry.get("status") == "ok":
@@ -159,6 +172,7 @@ def _not_available_reason(entry: Any) -> str | None:
 
 
 def _interpretation(entry: Any) -> str | None:
+    """Return a shortened interpretation string for a metric entry."""
     raw = _raw_interpretation(entry)
     return _shorten(raw) if raw else None
 
@@ -167,6 +181,7 @@ def _format_metric_entries(
     entries: list[Any],
     value_getter: Callable[[Any], Any],
 ) -> tuple[str, str | None]:
+    """Format one or more metric runs and optional interpretation notes."""
     values: list[str] = []
     interpretations: list[str] = []
     for index, entry in enumerate(entries, start=1):
@@ -206,6 +221,7 @@ def _metric_line(
     missing: dict[str, str],
     detail_path: tuple[str, ...] | None = None,
 ) -> str:
+    """Build one labeled metric line and record missing-value reasons."""
     entries = _find_entries(metrics, aliases)
     value_getter = (
         (lambda entry: _nested_get(entry, detail_path))
@@ -221,6 +237,7 @@ def _metric_line(
 
 
 def _missing_reason_from_value(value: str) -> str:
+    """Extract the not-available reason from an already-formatted value."""
     if NOT_AVAILABLE_SEPARATOR in value:
         reason = value.split(NOT_AVAILABLE_SEPARATOR, 1)[1]
         return reason.split(";", 1)[0].strip()
@@ -228,6 +245,7 @@ def _missing_reason_from_value(value: str) -> str:
 
 
 def _header_value(metrics: dict, *keys: str) -> str:
+    """Return the first non-empty header value from the metrics payload."""
     for key in keys:
         value = metrics.get(key)
         if value not in (None, ""):

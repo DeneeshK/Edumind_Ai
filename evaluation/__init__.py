@@ -1,2 +1,1 @@
-"""Standalone evaluation package for EduMind."""
-
+"""Evaluation metrics, report collection, and aggregation package."""

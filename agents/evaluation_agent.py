@@ -71,10 +71,12 @@ MAX_QUESTIONS = 7  # hard ceiling — never exceeded regardless of pace
 
 
 def _lesson_excerpt(content: str, max_chars: int = 1500) -> str:
+    """Trim lesson markdown to the portion sent into evaluation prompts."""
     return content[:max_chars].strip() if content else ""
 
 
 def _module_context(module: dict[str, Any]) -> dict[str, Any]:
+    """Normalize module metadata into the scope used by evaluation prompts."""
     metadata = module.get("module_metadata") or {}
     return {
         "title": module.get("title", ""),

@@ -44,6 +44,7 @@ def _trace_agent_run(run_fn):
     """
     @functools.wraps(run_fn)
     async def wrapper(self, system, user_message, context="", model=None):
+        """Run one traced agent call and emit its final trace record."""
         import uuid
         trace_id = str(uuid.uuid4())[:8]
         t0 = time.perf_counter()
@@ -81,6 +82,8 @@ def _trace_agent_run(run_fn):
 
 
 class BaseAgent:
+    """Shared tool-loop, tracing, and tool-schema helpers for EduMind agents."""
+
     NAME: str = "base_agent"
     TOOLS: list[dict] = []
     TERMINAL_TOOL: str = ""

@@ -21,6 +21,15 @@ from config import settings
 
 
 class EvaluatorAgent(BaseAgent):
+    """
+    Run the legacy interactive evaluation flow for one module.
+
+    The evaluator asks grounded questions, records the question/answer log,
+    computes scores, persists the EvaluationReport, and feeds the adaptation
+    engine with enough evidence to decide whether the student should advance,
+    reteach, detour, or escalate.
+    """
+
     NAME = "evaluator_agent"
     TERMINAL_TOOL = "submit_evaluation"
     MAX_GROUNDING_CHARS = 6000
@@ -28,9 +37,11 @@ class EvaluatorAgent(BaseAgent):
     def __init__(self, state: StudentState, emit_fn=None, ask_fn=None):
         super().__init__(state)
         async def _default_emit(text: str) -> None:
+            """Emit evaluator text in legacy CLI mode."""
             print(text, flush=True)
 
         async def _default_ask(question: str, **kw) -> str:
+            """Ask an evaluation question in legacy CLI mode."""
             print(question, flush=True)
             return input("Your answer: ").strip()
 
@@ -154,6 +165,7 @@ class EvaluatorAgent(BaseAgent):
     # ── Tool executor ─────────────────────────────────────────────────────────
 
     def _compact_grounding_text(self, text: str) -> str:
+        """Keep module content within the evaluator prompt budget."""
         text = text.strip()
         if len(text) <= self.MAX_GROUNDING_CHARS:
             return text
@@ -167,6 +179,13 @@ class EvaluatorAgent(BaseAgent):
         )
 
     def _module_grounding_text(self, concept: str = "") -> str:
+        """
+        Return the authoritative text allowed for evaluation questions.
+
+        Delivered lesson content is preferred. When the lesson text is missing,
+        the evaluator falls back to module metadata so it can still ask basic
+        concept questions without inventing content outside the module.
+        """
         module = self._current_module()
         content = ""
         if module is not None:
@@ -187,11 +206,13 @@ class EvaluatorAgent(BaseAgent):
         return self._compact_grounding_text(content)
 
     def _source_quote_supported(self, source_quote: str, grounding_text: str) -> bool:
+        """Return whether a proposed source quote appears verbatim in grounding text."""
         quote = " ".join(source_quote.strip().lower().split())
         haystack = " ".join(grounding_text.strip().lower().split())
         return bool(quote and len(quote) >= 8 and quote in haystack)
 
     def _unsupported_question_terms(self, question: str, grounding_text: str) -> list[str]:
+        """Return important question terms not present in the module grounding text."""
         ignored_terms = {
             "about",
             "according",
@@ -248,6 +269,7 @@ class EvaluatorAgent(BaseAgent):
         return sorted(set(unsupported))
 
     def _fallback_questions(self, concept: str) -> list[tuple[str, str]]:
+        """Return safe evaluation questions when the tool loop cannot produce them."""
         module = self._current_module()
         module_name = module.title if module else concept
 
@@ -275,17 +297,26 @@ class EvaluatorAgent(BaseAgent):
         ]
 
     def _question_out_of_scope_reason(self, question: str) -> str | None:
+        """Return a reason for rejecting a question, or None when it is allowed."""
         # Generic scope control is enforced by source_quote support and
         # unsupported-term checks. No topic-specific curriculum rules live here.
         return None
 
     def _module_boundary_rules(self, module) -> str:
+        """Return the evaluator prompt rule that keeps assessment inside one module."""
         return (
             "Assess only the current module concept, its explicitly listed "
             "prerequisites, and content already delivered in this module."
         )
 
     async def _run_fallback_evaluation(self, concept: str, target_count: int) -> dict:
+        """
+        Ask deterministic fallback questions and compute approximate scores.
+
+        This path keeps the session usable if the LLM tool loop fails. It uses
+        answer presence and length as a conservative signal rather than claiming
+        deep semantic grading.
+        """
         for q_type, question in self._fallback_questions(concept):
             if len(self._qa_log) >= target_count:
                 break
@@ -321,6 +352,7 @@ class EvaluatorAgent(BaseAgent):
         }
 
     async def _execute_tool(self, tool_name: str, args: dict) -> str:
+        """Execute evaluator tool calls for asking questions and submitting scores."""
         if tool_name == "ask_question":
             question = args["question"]
             q_type = args.get("question_type", "recall")

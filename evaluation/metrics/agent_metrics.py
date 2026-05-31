@@ -1,3 +1,5 @@
+"""Agent and curriculum quality metrics used by the evaluation runner."""
+
 from __future__ import annotations
 
 import asyncio
@@ -19,6 +21,7 @@ def _schedule_metric(
     session_id: str,
     student_id: str,
 ) -> None:
+    """Schedule a metric write from synchronous metric code when a loop exists."""
     try:
         asyncio.get_running_loop().create_task(
             record_metric(metric_name, component, score, details, session_id, student_id)
@@ -28,6 +31,7 @@ def _schedule_metric(
 
 
 def _parse_judge(raw: dict[str, Any], fallback: float) -> tuple[float, dict]:
+    """Extract a bounded score from an LLM judge payload."""
     score = raw.get("score", fallback)
     try:
         score = _clamp(float(score))
@@ -43,6 +47,7 @@ async def curriculum_coverage_score(
     session_id: str,
     student_id: str,
 ) -> dict:
+    """Score whether a generated curriculum covers the requested topic."""
     metric_name = "curriculum_coverage"
     try:
         concepts = [str(m.get("concept", "")).strip() for m in generated_modules if m.get("concept")]
@@ -80,6 +85,7 @@ async def curriculum_ordering_score(
     session_id: str,
     student_id: str,
 ) -> dict:
+    """Score prerequisite ordering across generated modules."""
     metric_name = "curriculum_ordering"
     try:
         seen: set[str] = set()
@@ -114,6 +120,7 @@ async def curriculum_ordering_score(
 
 
 def _lesson_structure_score(lesson_text: str, module: dict, student_pace: str) -> dict:
+    """Compute a deterministic fallback score for lesson structure."""
     word_count = len(lesson_text.split())
     expected_words = {"fast": 400, "medium": 700, "deep": 1100}.get(student_pace, 700)
     word_score = _clamp(word_count / expected_words)
@@ -147,6 +154,7 @@ async def lesson_quality_score(
     session_id: str,
     student_id: str,
 ) -> dict:
+    """Score lesson quality using deterministic structure and an LLM judge."""
     metric_name = "lesson_quality"
     try:
         structure = _lesson_structure_score(lesson_text, module, student_pace)
@@ -176,6 +184,7 @@ async def question_quality_score(
     session_id: str,
     student_id: str,
 ) -> dict:
+    """Score generated question quality and grounding against lesson text."""
     metric_name = "question_quality"
     try:
         if not questions:
@@ -229,6 +238,7 @@ async def scoring_consistency_score(
     session_id: str,
     student_id: str,
 ) -> dict:
+    """Score whether evaluator scoring is internally consistent with a QA log."""
     metric_name = "scoring_consistency"
     try:
         if not qa_log:
@@ -265,6 +275,7 @@ def routing_accuracy_score(
     session_id: str,
     student_id: str,
 ) -> dict:
+    """Score whether an adaptation action matches mastery and misconception signals."""
     metric_name = "routing_accuracy"
     try:
         normalized_action = (actual_action or "").upper()

@@ -1,3 +1,5 @@
+"""Persistence helpers for evaluation metric runs and reports."""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +12,7 @@ from evaluation.report_writer import save_metrics_txt_report
 
 
 def _json_payload(details: dict) -> str:
+    """Serialize metric details safely for JSONB/text storage."""
     return json.dumps(details or {}, default=str)
 
 

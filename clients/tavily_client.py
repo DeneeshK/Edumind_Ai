@@ -66,6 +66,7 @@ def _save_cache() -> None:
 _client: TavilyClient | None = None
 
 def _get_client() -> TavilyClient:
+    """Return the process-wide Tavily SDK client."""
     global _client
     if _client is None:
         _client = TavilyClient(api_key=settings.tavily_api_key)
@@ -73,6 +74,7 @@ def _get_client() -> TavilyClient:
 
 
 def _cache_key(query: str) -> str:
+    """Build a stable cache key for a normalized search query."""
     return hashlib.md5(query.strip().lower().encode()).hexdigest()
 
 
@@ -93,12 +95,12 @@ def search(query: str, max_results: int = 5) -> list[dict]:
 
     entry = _cache.get(key)
     if entry and entry.get("expires_at", 0) > now:
-        logger.debug("Tavily TTL cache hit: '{}'", query[:60])
+        logger.debug("Tavily TTL cache hit: key={} query_chars={}", key[:12], len(query))
         return entry["results"]
 
     try:
         client = _get_client()
-        logger.info("Tavily API call: '{}'", query[:80])
+        logger.info("Tavily API call: key={} query_chars={}", key[:12], len(query))
         response = client.search(
             query=query,
             max_results=max_results,
@@ -111,11 +113,11 @@ def search(query: str, max_results: int = 5) -> list[dict]:
             "query": query[:120],  # stored for debug inspection
         }
         _save_cache()
-        logger.info("Tavily: {} results for '{}' (cached 24h)", len(results), query[:60])
+        logger.info("Tavily: {} results cached for key={}", len(results), key[:12])
         return results
 
     except Exception as e:
-        logger.warning("Tavily search failed for '{}': {} — returning []", query[:60], e)
+        logger.warning("Tavily search failed for key={}: {} — returning []", key[:12], e)
         return []
 
 

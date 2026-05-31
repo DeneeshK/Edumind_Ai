@@ -1,3 +1,5 @@
+"""APScheduler integration for periodic evaluation aggregation."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -30,6 +32,7 @@ async def _run_monthly_aggregation() -> None:
 
 
 def start_scheduler() -> None:
+    """Start weekly/monthly evaluation aggregation jobs when dependencies exist."""
     global _scheduler
     if _scheduler is not None:
         return
@@ -70,8 +73,8 @@ def start_scheduler() -> None:
 
 
 def stop_scheduler() -> None:
+    """Stop the evaluation scheduler during application shutdown."""
     global _scheduler
     if _scheduler:
         _scheduler.shutdown(wait=False)
         _scheduler = None
-

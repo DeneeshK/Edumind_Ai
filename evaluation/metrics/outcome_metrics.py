@@ -1,3 +1,5 @@
+"""Learning outcome metrics for mastery, calibration, and session efficiency."""
+
 from __future__ import annotations
 
 import asyncio
@@ -15,6 +17,7 @@ def _schedule_metric(
     session_id: str,
     student_id: str,
 ) -> None:
+    """Schedule an outcome metric write from synchronous metric code."""
     try:
         asyncio.get_running_loop().create_task(
             record_metric(metric_name, "outcome", score, details, session_id, student_id)
@@ -29,6 +32,7 @@ def mastery_progression_rate(
     session_id: str,
     student_id: str,
 ) -> dict:
+    """Score whether mastery improved over the available history."""
     metric_name = "mastery_progression_rate"
     try:
         history = [float(v) for v in mastery_history if v is not None]
@@ -66,6 +70,7 @@ def calibration_quality_score(
     session_id: str,
     student_id: str,
 ) -> dict:
+    """Score how closely confidence matched observed mastery."""
     metric_name = "calibration_quality"
     try:
         deltas = [abs(float(delta)) for delta in calibration_deltas if delta is not None]
@@ -100,6 +105,7 @@ def session_efficiency_score(
     session_id: str,
     student_id: str,
 ) -> dict:
+    """Score learning efficiency from progress, reteach count, and duration."""
     metric_name = "session_efficiency"
     try:
         attempted = max(0, int(modules_attempted))

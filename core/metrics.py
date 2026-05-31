@@ -36,7 +36,12 @@ _EVAL_BUCKETS = (0.1, 0.5, 1, 2, 5, 10, 30)
 
 
 class EduMindMetrics:
-    """All application metrics in one place."""
+    """
+    Registry-backed Prometheus metrics for backend observability.
+
+    The class centralizes metric names, labels, and buckets so route handlers,
+    clients, services, and background jobs record compatible time series.
+    """
 
     def __init__(self) -> None:
 
@@ -190,5 +195,5 @@ metrics = EduMindMetrics()
 
 
 def prometheus_response() -> tuple[bytes, str]:
-    """Return (body_bytes, content_type) for the /metrics endpoint."""
+    """Return the Prometheus scrape payload and content type for `/metrics`."""
     return generate_latest(), CONTENT_TYPE_LATEST

@@ -2,9 +2,9 @@
 core/course_service.py
 Frontend-facing course/module orchestration.
 
-This layer reuses the existing agents where they are strong (curriculum
-planning, Groq, Tavily, RAG) while exposing a persistent course UX:
-create plan now, generate lesson content lazily, save it, reopen it later.
+This layer coordinates course planning, roadmap persistence, lazy lesson
+generation, grounded question creation, module chat, and completion state for
+the frontend API.
 """
 
 from __future__ import annotations
@@ -82,6 +82,7 @@ PLACEHOLDER_QUESTION_PATTERNS = (
 
 
 def infer_domain(topic: str, goal: str) -> str:
+    """Infer a broad learning domain from the requested topic and goal."""
     text = f"{topic} {goal}".lower()
     domain_map = [
         ("machine learning", ("machine learning", "ml", "ai", "model", "neural")),
@@ -96,6 +97,7 @@ def infer_domain(topic: str, goal: str) -> str:
 
 
 def _clean_list(values: list[Any] | Any | None) -> list[str]:
+    """Normalize scalar/list/dict values into a de-duplicated string list."""
     if values is None:
         values = []
     elif not isinstance(values, list):
@@ -115,6 +117,7 @@ def _clean_list(values: list[Any] | Any | None) -> list[str]:
 
 
 def module_required_concepts(module: dict[str, Any]) -> list[str]:
+    """Return the concepts a module is expected to explicitly teach."""
     metadata = module.get("module_metadata") or {}
     concepts = _clean_list(module.get("concepts_taught") or metadata.get("concepts_taught"))
     if concepts:
@@ -127,12 +130,14 @@ def module_required_concepts(module: dict[str, Any]) -> list[str]:
 
 
 def _module_question_scope(module: dict[str, Any], fallback: list[str] | None = None) -> list[str]:
+    """Return the concepts that generated questions are allowed to test."""
     metadata = module.get("module_metadata") or {}
     scope = _clean_list(module.get("question_scope") or metadata.get("question_scope"))
     return scope or list(fallback or [])
 
 
 def _concepts_present_in_lesson(concepts: list[str], content: str) -> list[str]:
+    """Filter planned concepts down to concepts that appear in lesson content."""
     return [concept for concept in concepts if concept_appears_in_text(content, concept)]
 
 
@@ -141,6 +146,7 @@ def _section_sentence_for_concept(
     concept: str,
     used_quotes: set[str],
 ) -> tuple[str, str] | None:
+    """Find a lesson sentence that can ground a question for one concept."""
     for section, sentence in section_sentences:
         if sentence in used_quotes:
             continue
@@ -154,6 +160,7 @@ def _section_sentence_for_concept(
 
 
 def _profile_value(course: dict[str, Any], *keys: str) -> str:
+    """Read a profile, intent, or course-level value by priority order."""
     profile = course.get("personalization_profile") or {}
     intent = profile.get("current_intent") or {}
     for key in keys:
@@ -164,6 +171,7 @@ def _profile_value(course: dict[str, Any], *keys: str) -> str:
 
 
 def _youtube_video_id(url: str) -> str:
+    """Extract a YouTube video id from common watch, short, and embed URLs."""
     parsed = urlparse((url or "").strip())
     host = parsed.netloc.lower().replace("www.", "").replace("m.", "")
     path = parsed.path.strip("/")
@@ -179,6 +187,7 @@ def _youtube_video_id(url: str) -> str:
 
 
 def youtube_watch_url_to_embed_url(url: str) -> str:
+    """Convert a YouTube watch/short URL into an embeddable player URL."""
     video_id = _youtube_video_id(url)
     if not video_id:
         return ""
@@ -186,6 +195,7 @@ def youtube_watch_url_to_embed_url(url: str) -> str:
 
 
 def _extract_youtube_url(result: dict[str, Any]) -> str:
+    """Extract a usable YouTube watch URL from a Tavily result."""
     url = str(result.get("url") or "").strip()
     if youtube_watch_url_to_embed_url(url):
         return url
@@ -200,6 +210,7 @@ def _extract_youtube_url(result: dict[str, Any]) -> str:
 
 
 def _is_youtube_playlist_spam(url: str, result: dict[str, Any]) -> bool:
+    """Detect playlist pages that are poor single-lesson video recommendations."""
     title = str(result.get("title") or "").lower()
     url_lower = (url or "").lower()
     if "youtube.com/playlist" in url_lower or "/playlist" in url_lower:
@@ -211,6 +222,7 @@ def _video_result_matches_level_and_pace(
     course: dict[str, Any],
     result: dict[str, Any],
 ) -> bool:
+    """Reject video results that are clearly mismatched to learner level or pace."""
     text = " ".join(
         str(result.get(key) or "")
         for key in ("title", "content", "raw_content", "snippet")
@@ -228,6 +240,7 @@ def _video_result_matches_level_and_pace(
 
 
 def _youtube_search_query(course: dict[str, Any], module: dict[str, Any]) -> str:
+    """Build a YouTube-focused search query for optional lesson videos."""
     topic = str(course.get("topic") or "").strip()
     title = str(module.get("title") or "").strip()
     concept = str(module.get("concept") or "").strip()
@@ -255,12 +268,14 @@ def _youtube_search_query(course: dict[str, Any], module: dict[str, Any]) -> str
 
 
 def _lesson_videos_from_module(module: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read persisted lesson videos from module fields or metadata."""
     metadata = module.get("module_metadata") or {}
     videos = module.get("videos") or module.get("lesson_videos") or metadata.get("lesson_videos") or []
     return videos if isinstance(videos, list) else []
 
 
 def lesson_videos_from_module(module: dict[str, Any]) -> list[dict[str, Any]]:
+    """Public wrapper used by routers to expose persisted lesson videos."""
     return _lesson_videos_from_module(module)
 
 
@@ -270,6 +285,7 @@ def youtube_videos_from_tavily_results(
     results: list[dict[str, Any]] | None,
     max_results: int = 3,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Convert Tavily search results into de-duplicated YouTube video cards."""
     videos: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     stats: dict[str, Any] = {
@@ -280,6 +296,7 @@ def youtube_videos_from_tavily_results(
     }
 
     def reject(reason: str) -> None:
+        """Track why a candidate video was excluded."""
         counts = stats["rejection_counts"]
         counts[reason] = counts.get(reason, 0) + 1
 
@@ -335,6 +352,7 @@ async def search_youtube_videos_for_module(
     module: dict[str, Any],
     max_results: int = 3,
 ) -> list[dict[str, Any]]:
+    """Search for optional YouTube lesson videos and return selected cards."""
     query = _youtube_search_query(course, module)
     if not query:
         return []
@@ -385,6 +403,7 @@ async def _optional_youtube_videos_for_module(
     course: dict[str, Any],
     module: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    """Best-effort video lookup that never blocks lesson generation."""
     try:
         return await search_youtube_videos_for_module(course, module)
     except Exception as exc:
@@ -393,6 +412,7 @@ async def _optional_youtube_videos_for_module(
 
 
 def _python_intent_guardrails(topic: str, goal: str, target_context: str) -> list[str]:
+    """Return topics to avoid for beginner pure-Python course intents."""
     text = f"{topic} {goal} {target_context}".lower()
     if "python" not in text:
         return []
@@ -413,6 +433,7 @@ def _python_intent_guardrails(topic: str, goal: str, target_context: str) -> lis
 
 
 def _trusted_strategy(profile: dict[str, Any]) -> str:
+    """Summarize the planning strategy implied by trusted profile fields."""
     intent = profile.get("current_intent") or {}
     topic = str(intent.get("exact_subject") or intent.get("topic") or profile.get("topic") or "the topic")
     target = str(intent.get("target_context") or profile.get("target_context") or "").lower()
@@ -460,6 +481,7 @@ def _current_intent(
     prior_knowledge: str,
     data: dict[str, Any],
 ) -> dict[str, Any]:
+    """Create the normalized course intent block used by planning prompts."""
     exact_subject = str(data.get("exact_subject") or data.get("topic") or topic or "").strip()
     learning_goal = str(data.get("learning_goal") or data.get("goal") or goal or "").strip()
     goal_description = str(data.get("goal_description") or "").strip()
@@ -533,6 +555,7 @@ def _current_intent(
 
 
 def _trusted_declared_known(data: dict[str, Any], intent: dict[str, Any]) -> list[str]:
+    """Return declared known concepts only when they fit the current course intent."""
     profile_for_relevance = {
         "topic": intent.get("topic"),
         "exact_subject": intent.get("exact_subject"),
@@ -551,6 +574,7 @@ def _trusted_declared_known(data: dict[str, Any], intent: dict[str, Any]) -> lis
 
 
 def _trusted_declared_weak(data: dict[str, Any], intent: dict[str, Any]) -> list[str]:
+    """Return declared weak concepts that are relevant to the current course intent."""
     profile_for_relevance = {
         "topic": intent.get("topic"),
         "exact_subject": intent.get("exact_subject"),
@@ -669,6 +693,7 @@ def apply_relevant_history_filter(
     profile: dict[str, Any],
     student_history: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    """Classify stored student history as relevant or irrelevant to the new course."""
     intent = profile.get("current_intent") or _current_intent(
         str(profile.get("topic") or ""),
         str(profile.get("learning_goal") or ""),
@@ -709,6 +734,7 @@ def apply_relevant_history_filter(
 
 
 def filtered_history_snapshot(profile: dict[str, Any], history_filter: dict[str, Any]) -> dict[str, Any]:
+    """Build the compact history payload passed into curriculum planning."""
     return {
         "filter": history_filter,
         "mastered_concepts": [{"concept": c, "source": "verified_history_filter"} for c in profile.get("assumed_known_concepts") or []],
@@ -721,10 +747,11 @@ def filtered_history_snapshot(profile: dict[str, Any], history_filter: dict[str,
 
 
 def sanitize_trusted_profile_for_course(profile: dict[str, Any]) -> dict[str, Any]:
-    """Sanitize the profile to prevent contamination before curriculum generation."""
+    """Remove unrelated concepts from trusted profile fields before planning."""
     do_not_include = [str(x).lower().strip() for x in profile.get("do_not_include") or []]
     
     def _is_clean(concept: str) -> bool:
+        """Return whether a profile concept survives the do-not-include filter."""
         c_lower = str(concept).lower().strip()
         return not any(dni in c_lower or c_lower in dni for dni in do_not_include)
     
@@ -758,6 +785,13 @@ async def create_course(
     name: str = "Student",
     personalization_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """
+    Create a persisted course, modules, master roadmap, and frontend roadmap.
+
+    The function normalizes personalization data, builds a curriculum through
+    the curriculum architect, persists the resulting course rows, and records
+    planning metadata used later by lesson generation.
+    """
     pace = pace if pace in ("fast", "medium", "deep") else "medium"
     profile = normalise_personalization_profile(
         topic=topic,
@@ -936,6 +970,7 @@ async def create_course_events(
     name: str = "Student",
     personalization_profile: dict[str, Any] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
+    """Stream course-creation progress events and finish with the saved course."""
     yield {"event": "connected", "data": {"message": "connected"}}
     yield {
         "event": "understanding_started",
@@ -1007,6 +1042,7 @@ async def create_course_events(
 
 
 def _sentence_candidates(markdown: str) -> list[str]:
+    """Split markdown into sentence candidates suitable for source quotes."""
     # Keep evidence text close to the final lesson so source_quote validation
     # can verify an actual substring instead of a markdown-stripped paraphrase.
     pieces = re.split(r"(?<=[.!?])\s+", markdown)
@@ -1018,11 +1054,13 @@ def _sentence_candidates(markdown: str) -> list[str]:
 
 
 def _section_sentence_candidates(markdown: str) -> list[tuple[str, str]]:
+    """Return sentence candidates grouped by their nearest markdown heading."""
     current_section = "Lesson"
     result: list[tuple[str, str]] = []
     buffer: list[str] = []
 
     def flush(section: str, lines: list[str]) -> None:
+        """Move buffered lesson lines into sentence candidates for one section."""
         text = "\n".join(lines).strip()
         if not text:
             return
@@ -1044,11 +1082,13 @@ def _section_sentence_candidates(markdown: str) -> list[tuple[str, str]]:
 
 
 def _is_placeholder_question_text(text: str) -> bool:
+    """Detect generic question phrasing that is not useful for grounded checks."""
     clean = re.sub(r"\s+", " ", text or "").strip().lower()
     return any(re.search(pattern, clean, flags=re.I) for pattern in PLACEHOLDER_QUESTION_PATTERNS)
 
 
 def _question_auxiliary_for_concept(concept: str) -> str:
+    """Choose a simple auxiliary verb for concept-specific question stems."""
     clean = str(concept or "").strip().lower()
     return "do" if clean.endswith("s") and not clean.endswith("ss") else "does"
 
@@ -1058,6 +1098,7 @@ def grounded_questions_from_content(
     module: dict[str, Any],
     pace: str,
 ) -> list[dict[str, Any]]:
+    """Create deterministic lesson-grounded questions from saved markdown content."""
     target = {"fast": 2, "medium": 3, "deep": 5}.get(pace, 3)
     concepts_taught = module_required_concepts(module)
     question_scope = _module_question_scope(module, concepts_taught)
@@ -1114,6 +1155,7 @@ def normalize_question_ids(
     module_id: str,
     questions: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Assign stable course/module-scoped ids to generated question objects."""
     normalized = []
     for idx, question in enumerate(questions, start=1):
         item = dict(question)
@@ -1136,6 +1178,7 @@ def question_generation_prompt(
     lesson_content: str,
     validation_issues: list[str],
 ) -> str:
+    """Build the strict JSON prompt for retrying grounded question generation."""
     concepts_taught = module_required_concepts(module)
     question_scope = _module_question_scope(module, concepts_taught)
     lesson_concepts = _concepts_present_in_lesson(question_scope, lesson_content)
@@ -1201,6 +1244,7 @@ Rules:
 
 
 def _coerce_question_list(raw_questions: Any, module: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize LLM question JSON into the backend question schema subset."""
     if not isinstance(raw_questions, list):
         return []
     default_concepts = _module_question_scope(module, module_required_concepts(module))
@@ -1236,6 +1280,7 @@ async def _retry_grounded_questions_with_prompt(
     content: str,
     validation_issues: list[str],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Retry question generation with explicit validation issues as feedback."""
     course_id = str(course.get("id") or "")
     module_id = str(module.get("id") or "")
     try:
@@ -1333,6 +1378,7 @@ async def adaptation_context_for_module(
     course_id: str,
     module: dict[str, Any],
 ) -> dict[str, Any]:
+    """Collect student skill, doubt, and adaptation signals for lesson generation."""
     from db.postgres import get_adaptation_summary, get_compact_doubt_summary
     course = await get_course(course_id)
     profile = (course or {}).get("personalization_profile") or {}
@@ -1412,6 +1458,7 @@ def lesson_prompt(
     adaptation_context: dict[str, Any],
     previous_modules: list[dict[str, Any]] | None = None,
 ) -> str:
+    """Build the lesson-generation prompt from course, module, and adaptation data."""
     pace = course.get("pace", "medium")
     concept = module.get("concept", "")
     profile = course.get("personalization_profile") or {}
@@ -1621,6 +1668,13 @@ async def generate_module_lesson(
     module_id: str,
     student_id: str | None = None,
 ) -> dict[str, Any]:
+    """
+    Generate and persist lesson markdown for one module.
+
+    Existing lesson content is returned without regeneration. New content is
+    validated, saved with optional videos, and returned with an empty question
+    list because questions are generated only after lesson content exists.
+    """
     course = await get_course(course_id, student_id)
     module = await get_course_module(course_id, module_id)
     if not course or not module:
@@ -1725,6 +1779,7 @@ async def generate_module_lesson_events(
     module_id: str,
     student_id: str | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
+    """Stream lesson generation, persist the final lesson, and emit saved state."""
     yield {"event": "connected", "data": {"message": "connected"}}
     course = await get_course(course_id, student_id)
     module = await get_course_module(course_id, module_id)
@@ -1838,6 +1893,7 @@ async def get_or_create_module_questions(
     course: dict[str, Any],
     module: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    """Return saved module questions or generate grounded questions from content."""
     questions = await get_module_questions(course["id"], module["id"])
     if questions:
         return questions
@@ -1864,6 +1920,7 @@ async def get_or_create_module_questions(
 
 
 def classify_doubt(message: str, module: dict[str, Any]) -> tuple[str, list[str], list[str]]:
+    """Classify a module chat message into a doubt type and related concepts."""
     text = message.lower()
     prereqs = [str(p) for p in module.get("prerequisites") or []]
     related = [module.get("concept", "")]
@@ -1892,6 +1949,7 @@ async def update_metacognition_from_doubt(
     concept: str,
     doubt_type: str,
 ) -> None:
+    """Update long-term doubt counters in the student's metacognition profile."""
     profile = await load_metacognition(student_id) or {}
     doubt_profile = profile.setdefault("doubt_profile", {})
     by_type = doubt_profile.setdefault("by_type", {})
@@ -1910,6 +1968,12 @@ async def answer_module_chat(
     student_id: str,
     message: str,
 ) -> dict[str, Any]:
+    """
+    Answer a student's module chat question and persist doubt evidence.
+
+    The response is grounded in the saved module lesson and records both the
+    user message and assistant reply for future adaptation context.
+    """
     course = await get_course(course_id, student_id)
     module = await get_course_module(course_id, module_id)
     if not course or not module:
@@ -2011,6 +2075,7 @@ async def evaluate_module_answer(
     answer: str,
     confidence: int = 3,
 ) -> dict[str, Any]:
+    """Evaluate one saved check-question answer and persist mastery signals."""
     course = await get_course(course_id, student_id)
     module = await get_course_module(course_id, module_id)
     if not course or not module:

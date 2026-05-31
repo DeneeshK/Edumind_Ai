@@ -26,6 +26,8 @@ from config import settings
 
 
 class OrchestratorAgent(BaseAgent):
+    """Coordinates onboarding, tutoring, evaluation, adaptation, and session close."""
+
     NAME = "orchestrator"
     TERMINAL_TOOL = "end_session"
 
@@ -44,6 +46,7 @@ class OrchestratorAgent(BaseAgent):
         self.TOOLS = self._build_tools()
 
     def _ensure_eval_runner(self, topic: str = ""):
+        """Create and register the optional evaluation runner for the session."""
         if not settings.eval_enabled:
             return None
         if self._eval_runner is None:
@@ -65,6 +68,7 @@ class OrchestratorAgent(BaseAgent):
         return self._eval_runner
 
     def _clear_eval_runner(self) -> None:
+        """Clear the optional evaluation runner from the RAG pipeline."""
         try:
             from core.rag_pipeline import clear_eval_runner
 
@@ -74,14 +78,17 @@ class OrchestratorAgent(BaseAgent):
         self._eval_runner = None
 
     async def _cli_emit(self, text: str) -> None:
+        """Emit session text in legacy CLI mode."""
         print(text)
 
     async def _cli_ask(self, question: str, is_confidence: bool = False) -> str:
+        """Ask for input in legacy CLI mode, matching the API ask contract."""
         label = "Confidence (1-5)" if is_confidence else "Your answer"
         print(f"\n{question}")
         return input(f"{label}: ").strip()
 
     def _build_tools(self) -> list[dict]:
+        """Build tool schemas that let the LLM plan, route, and close sessions."""
         return [
             self.build_tool(
                 name="plan_session",
@@ -176,6 +183,7 @@ class OrchestratorAgent(BaseAgent):
     # ── Tool executor ─────────────────────────────────────────────────────────
 
     async def _execute_tool(self, tool_name: str, args: dict) -> str:
+        """Handle Orchestrator-owned tool calls and delegate shared tools."""
         if tool_name == "plan_session":
             modules_to_cover = args.get("modules_to_cover", [])
             session_goal = args.get("session_goal", "")
@@ -319,6 +327,7 @@ class OrchestratorAgent(BaseAgent):
         # and the student knows the system is working.
         import asyncio as _asyncio
         async def _progress_ping(stop_event: _asyncio.Event) -> None:
+            """Emit periodic curriculum-build progress messages until stopped."""
             messages = [
                 "📚 Researching the topic...",
                 "🗺️ Mapping concept dependencies...",

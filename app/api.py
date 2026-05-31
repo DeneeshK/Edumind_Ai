@@ -113,6 +113,7 @@ limiter = Limiter(key_func=get_remote_address)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Initialize shared services at startup and flush in-flight sessions at shutdown."""
     await init_db()
     if settings.eval_enabled:
         from evaluation.scheduler import start_scheduler
@@ -175,6 +176,8 @@ app.include_router(course_router)
 # ── Request / Response models ─────────────────────────────────────────────────
 
 class StartRequest(BaseModel):
+    """Legacy session-start request for creating or resuming a student session."""
+
     student_id: str | None = None   # None = new student
     name: str = "Student"
     domain: str = ""
@@ -184,6 +187,8 @@ class StartRequest(BaseModel):
 
 
 class StartResponse(BaseModel):
+    """Response returned after a legacy session is created."""
+
     session_id: str
     student_id: str
     is_new: bool
@@ -191,21 +196,29 @@ class StartResponse(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    """Free-form message request for an active legacy session."""
+
     session_id: str
     message: str
 
 
 class AnswerRequest(BaseModel):
+    """Evaluator answer request for an active legacy session."""
+
     session_id: str
     answer: str
 
 
 class ConfidenceRequest(BaseModel):
+    """Confidence-rating request for an active legacy session."""
+
     session_id: str
     confidence: int                 # 1-5
 
 
 class ModuleStatus(BaseModel):
+    """Frontend-visible module status for a legacy session."""
+
     id: str
     index: int
     title: str
@@ -220,6 +233,8 @@ class ModuleStatus(BaseModel):
 
 
 class SessionStatus(BaseModel):
+    """Current state snapshot for an active legacy session."""
+
     session_id: str
     student_id: str
     domain: str
@@ -642,7 +657,7 @@ async def end_session(session_id: str):
 
 @app.get("/session/status/{session_id}", response_model=SessionStatus)
 async def get_status(session_id: str):
-    """Get current session state."""
+    """Return current in-memory session state for legacy live sessions."""
     ctx = _sessions.get(session_id)
     if not ctx:
         raise HTTPException(status_code=404, detail="Session not found")

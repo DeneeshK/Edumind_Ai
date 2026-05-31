@@ -1,6 +1,10 @@
 """
 core/rag_pipeline.py
-retrieve() — full RAG pipeline:
+retrieve() — RAG interface used by legacy agents.
+
+V1 currently returns no chunks because ChromaDB, embeddings, Tavily retrieval,
+and reranking are disabled to keep the EC2 deployment lightweight. The commented
+V2 body documents the intended restore path:
   HyDE → embed → ChromaDB → Tavily → combine → rerank → top 5 plain text chunks
 
 hyde()     — generate a hypothetical answer to improve retrieval
@@ -22,11 +26,13 @@ _eval_runner_ref = None
 
 
 def set_eval_runner(runner) -> None:
+    """Register the optional evaluation runner used by the V2 retrieval path."""
     global _eval_runner_ref
     _eval_runner_ref = runner
 
 
 def clear_eval_runner() -> None:
+    """Clear the optional evaluation runner reference."""
     global _eval_runner_ref
     _eval_runner_ref = None
 
@@ -47,13 +53,14 @@ async def hyde(query: str) -> str:
         messages=[{"role": "user", "content": prompt}],
         model=settings.generation_model,
     )
-    logger.debug("HyDE generated ({} chars) for query: '{}'", len(hypothetical), query[:60])
+    logger.debug("HyDE generated ({} chars) for query_chars={}", len(hypothetical), len(query))
     return hypothetical
 
 
 # ── retrieve() ────────────────────────────────────────────────────────────────
 
 def _is_relevant_chunk(chunk: str, query: str, topic: str | None = None) -> bool:
+    """Return whether a retrieved chunk shares meaningful tokens with the query."""
     chunk_tokens = token_set(chunk)
     query_tokens = token_set(query) | token_set(topic)
     if not query_tokens:
@@ -71,9 +78,13 @@ async def retrieve(
     module_id: str | None = None,
 ) -> list[str]:
     """
-    Full RAG pipeline. Returns top_k plain text chunks, reranked.
+    Return retrieval chunks for a query.
 
-    Steps:
+    V1 behavior is intentionally disabled and returns an empty list. The
+    parameters remain in place so legacy agents and future V2 retrieval can use
+    the same call surface without changing service code.
+
+    Planned V2 steps:
       1. HyDE: generate hypothetical answer to improve query embedding
       2. ChromaDB: vector search using the hypothetical answer
       3. Tavily: web search for live examples and current content
@@ -81,12 +92,16 @@ async def retrieve(
       5. Rerank: BGE Reranker selects final top_k
 
     Args:
-        query:  the concept or question to retrieve content for
-        domain: ChromaDB collection name (e.g. "machine_learning")
-        top_k:  number of final chunks to return (default 5)
+        query: Concept or question to retrieve content for.
+        domain: ChromaDB collection name when V2 retrieval is enabled.
+        top_k: Number of final chunks to return when retrieval is enabled.
+        course_id: Optional course filter for future persisted retrieval.
+        student_id: Optional student filter for future personalized retrieval.
+        topic: Optional topic text used by relevance filtering.
+        module_id: Optional module id used by future evaluation metrics.
 
     Returns:
-        list of plain text strings, best-first
+        Empty list in V1; best-first plain-text chunks when V2 is restored.
     """
     # ── V1: RAG disabled to reduce EC2 RAM/CPU load ─────────────────────────
     # ChromaDB (BGE-M3 ~2.2GB + Reranker ~1.2GB) and Tavily are hashed out.
@@ -147,7 +162,7 @@ async def retrieve(
     #     logger.warning("Tavily retrieval failed: {} — continuing with ChromaDB only", e)
 
     # if not chunks:
-    #     logger.warning("No chunks retrieved for query: '{}'", query)
+    #     logger.warning("No chunks retrieved for query_chars={}", len(query))
     #     return []
 
     # # ── Step 4 + 5: Combine → Rerank ─────────────────────────────────────
@@ -159,7 +174,7 @@ async def retrieve(
     #         seen.add(key)
     #         unique_chunks.append(c)
     # final = await rerank(query=query, chunks=unique_chunks, top_k=top_k)
-    # logger.info("RAG pipeline complete: {} final chunks for '{}'", len(final), query[:60])
+    # logger.info("RAG pipeline complete: {} final chunks for query_chars={}", len(final), len(query))
     # if _eval_runner_ref is not None:
     #     asyncio.create_task(
     #         _eval_runner_ref.on_rag_retrieve(

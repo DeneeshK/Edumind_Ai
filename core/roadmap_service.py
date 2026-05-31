@@ -19,6 +19,7 @@ PACE_LABELS = {
 
 
 def _clean_list(values: list[Any] | None) -> list[str]:
+    """Normalize optional roadmap list fields into unique strings."""
     result: list[str] = []
     seen: set[str] = set()
     for value in values or []:
@@ -34,11 +35,13 @@ def _clean_list(values: list[Any] | None) -> list[str]:
 
 
 def _title_case(value: str | None) -> str:
+    """Capitalize a display title without changing the remaining text."""
     value = (value or "").strip()
     return value[:1].upper() + value[1:] if value else "Course"
 
 
 def _target_label(profile: dict[str, Any], course: dict[str, Any]) -> str:
+    """Return the target-context label used in roadmap headings."""
     target = profile.get("target_context") or profile.get("learning_goal") or course.get("goal")
     if not target:
         return "Personalized Learning"
@@ -48,6 +51,7 @@ def _target_label(profile: dict[str, Any], course: dict[str, Any]) -> str:
 
 
 def _roadmap_title(profile: dict[str, Any], course: dict[str, Any]) -> str:
+    """Build the personalized roadmap title shown to the learner."""
     topic = profile.get("course_scope") or profile.get("exact_subject") or profile.get("topic") or course.get("topic") or "Course"
     target = _target_label(profile, course)
     pace = PACE_LABELS.get(profile.get("pace") or course.get("pace") or "medium", "Balanced")
@@ -74,6 +78,7 @@ def _roadmap_title(profile: dict[str, Any], course: dict[str, Any]) -> str:
 
 
 def _module_minutes(module: dict[str, Any], profile: dict[str, Any]) -> int:
+    """Choose a roadmap estimate that respects pace-specific minimums."""
     pace = profile.get("pace") or "medium"
     context = (profile.get("target_context") or profile.get("learning_goal") or "").lower()
     floor = {"fast": 25, "medium": 35, "deep": 55}.get(pace, 35)
@@ -84,6 +89,7 @@ def _module_minutes(module: dict[str, Any], profile: dict[str, Any]) -> int:
 
 
 def _difficulty(module: dict[str, Any], profile: dict[str, Any]) -> str:
+    """Return the roadmap difficulty label for a module."""
     if module.get("difficulty"):
         return str(module["difficulty"])
     depth = module.get("depth_level") or profile.get("pace") or "standard"
@@ -128,6 +134,7 @@ def _why_module_matters(module: dict[str, Any], profile: dict[str, Any]) -> str:
 
 
 def _already_known(profile: dict[str, Any], history: dict[str, Any] | None) -> list[str]:
+    """Summarize verified known concepts for the roadmap introduction."""
     known = _clean_list(profile.get("assumed_known_concepts") or profile.get("known_concepts"))
     if known:
         return known
@@ -142,6 +149,7 @@ def _already_known(profile: dict[str, Any], history: dict[str, Any] | None) -> l
 
 
 def _skipped_or_reduced(profile: dict[str, Any], already_known: list[str]) -> list[str]:
+    """Describe topics that should be compressed because of pace or prior mastery."""
     pace = profile.get("pace") or "medium"
     context = (profile.get("target_context") or profile.get("learning_goal") or "").lower()
     items: list[str] = []
@@ -184,6 +192,7 @@ def _emphasis(profile: dict[str, Any]) -> list[str]:
 
 
 def _study_advice(profile: dict[str, Any]) -> list[str]:
+    """Return study advice tailored to pace and target context."""
     advice = [
         "Take a 10-15 minute break after every 45-60 minutes.",
         "Try the check questions before moving to the next module.",
@@ -199,6 +208,7 @@ def _study_advice(profile: dict[str, Any]) -> list[str]:
 
 
 def _learner_is_beginner(profile: dict[str, Any]) -> bool:
+    """Infer whether the profile describes a beginner learner."""
     text = " ".join(
         str(profile.get(key) or "").lower()
         for key in ("learner_level", "prior_knowledge_summary", "prior_knowledge")
@@ -207,6 +217,7 @@ def _learner_is_beginner(profile: dict[str, Any]) -> bool:
 
 
 def _daily_capacity(profile: dict[str, Any]) -> int:
+    """Estimate daily roadmap study capacity in minutes."""
     pace = profile.get("pace") or "medium"
     beginner = _learner_is_beginner(profile)
     if pace == "deep":
@@ -244,6 +255,7 @@ def _max_modules_per_day(profile: dict[str, Any], total_modules: int = 0) -> int
 
 
 def _build_schedule(timeline: list[dict[str, Any]], total_minutes: int, profile: dict[str, Any]) -> list[dict[str, Any]]:
+    """Group roadmap modules into day-level schedule items."""
     capacity = _daily_capacity(profile)
     max_modules = _max_modules_per_day(profile, total_modules=len(timeline))
     days: list[dict[str, Any]] = []
@@ -261,6 +273,7 @@ def _build_schedule(timeline: list[dict[str, Any]], total_minutes: int, profile:
     current_modules = 0
 
     def finish_day() -> None:
+        """Finalize the current study day and reset the day accumulator."""
         nonlocal current, current_minutes, current_modules
         if not current["items"]:
             return
@@ -319,6 +332,7 @@ class CourseRoadmapService:
         profile: dict[str, Any] | None = None,
         student_history: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Return the complete frontend roadmap payload for a saved course."""
         profile = dict(profile or {})
         profile.setdefault("topic", course.get("topic"))
         profile.setdefault("learning_goal", course.get("goal"))

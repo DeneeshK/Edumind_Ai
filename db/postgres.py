@@ -470,6 +470,7 @@ async def upsert_student(
     goal: str,
     pace: str,
 ) -> None:
+    """Insert or update a student's identity and current course preferences."""
     async with get_conn() as conn:
         await conn.execute(
             """
@@ -513,6 +514,7 @@ async def write_evaluation(record: dict[str, Any]) -> None:
 async def upsert_concept_mastery(
     student_id: str, concept: str, correctness: float, depth: float
 ) -> None:
+    """Persist the latest mastery calculation for one student/concept pair."""
     mastery = round(0.6 * correctness + 0.4 * depth, 4)
     async with get_conn() as conn:
         await conn.execute(
@@ -530,6 +532,7 @@ async def upsert_concept_mastery(
 
 
 async def save_metacognition(student_id: str, profile_json: dict) -> None:
+    """Persist the student's metacognition profile JSON."""
     async with get_conn() as conn:
         await conn.execute(
             """
@@ -543,6 +546,7 @@ async def save_metacognition(student_id: str, profile_json: dict) -> None:
 
 
 async def load_metacognition(student_id: str) -> dict | None:
+    """Load a student's metacognition profile JSON if it exists."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
             "SELECT profile_json FROM metacognition WHERE student_id=$1", student_id
@@ -557,6 +561,7 @@ async def write_session_memory(
     modules_covered: list,
     started_at,
 ) -> None:
+    """Persist an end-of-session memory summary."""
     async with get_conn() as conn:
         await conn.execute(
             """
@@ -571,6 +576,7 @@ async def write_session_memory(
 
 
 async def bulk_write_decisions(decisions: list[dict], course_id: str = "") -> None:
+    """Persist multiple agent decision-log records."""
     if not decisions:
         return
     async with get_conn() as conn:
@@ -683,6 +689,7 @@ async def flush_session_to_db(
 # ── Frontend course/auth helpers ─────────────────────────────────────────────
 
 def _json_value(value: Any, default: Any = None) -> Any:
+    """Decode JSON strings while passing through already-decoded values."""
     if value is None:
         return default
     if isinstance(value, (dict, list)):
@@ -694,10 +701,12 @@ def _json_value(value: Any, default: Any = None) -> Any:
 
 
 def _course_id_for_curriculum(curriculum_id: int) -> str:
+    """Return the stable frontend course id for a curriculum row id."""
     return f"course-{curriculum_id}"
 
 
 def _course_title_from_profile(plan, personalization_profile: dict[str, Any] | None, pace: str) -> str:
+    """Build the saved course title from profile metadata and plan topic."""
     profile = personalization_profile or {}
     topic = profile.get("course_scope") or profile.get("exact_subject") or plan.topic
     pace_label = {"fast": "Fast", "medium": "Balanced", "deep": "Deep"}.get(
@@ -913,6 +922,7 @@ async def upsert_google_user(
 
 
 async def get_user_by_student_id(student_id: str) -> dict[str, Any] | None:
+    """Return the auth user linked to a student id, if one exists."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM users WHERE student_id=$1", student_id
@@ -929,6 +939,7 @@ async def get_user_by_student_id(student_id: str) -> dict[str, Any] | None:
 
 
 async def latest_curriculum_for_student(student_id: str):
+    """Return the newest curriculum row for a student, regardless of active flag."""
     async with get_conn() as conn:
         return await conn.fetchrow(
             """
@@ -1083,6 +1094,7 @@ async def sync_courses_for_student(student_id: str) -> None:
 
 
 async def recalculate_course_progress(course_id: str) -> float:
+    """Recompute and persist course progress from module completion state."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
@@ -1107,6 +1119,7 @@ async def recalculate_course_progress(course_id: str) -> float:
 
 
 async def list_courses(student_id: str) -> list[dict[str, Any]]:
+    """Return frontend course summaries for one student."""
     await sync_courses_for_student(student_id)
     async with get_conn() as conn:
         rows = await conn.fetch(
@@ -1133,6 +1146,7 @@ async def list_courses(student_id: str) -> list[dict[str, Any]]:
 
 
 async def get_course(course_id: str, student_id: str | None = None) -> dict[str, Any] | None:
+    """Return a course summary, optionally scoped to one student."""
     async with get_conn() as conn:
         where_student = "AND c.student_id=$2" if student_id else ""
         args = (course_id, student_id) if student_id else (course_id,)
@@ -1158,10 +1172,12 @@ async def get_course(course_id: str, student_id: str | None = None) -> dict[str,
 
 
 async def get_course_for_student(course_id: str, student_id: str) -> dict[str, Any] | None:
+    """Return a course only when it belongs to the given student."""
     return await get_course(course_id, student_id)
 
 
 async def delete_course(course_id: str, student_id: str | None = None) -> bool:
+    """Delete a course and linked curriculum when it is visible to the caller."""
     async with get_conn() as conn:
         async with conn.transaction():
             where_student = "AND student_id=$2" if student_id else ""
@@ -1191,6 +1207,7 @@ async def delete_course(course_id: str, student_id: str | None = None) -> bool:
 
 
 async def save_course_roadmap(course_id: str, roadmap: dict[str, Any]) -> dict[str, Any]:
+    """Upsert the frontend roadmap JSON for a course."""
     async with get_conn() as conn:
         await conn.execute(
             """
@@ -1206,6 +1223,7 @@ async def save_course_roadmap(course_id: str, roadmap: dict[str, Any]) -> dict[s
 
 
 async def get_course_roadmap(course_id: str) -> dict[str, Any] | None:
+    """Load the saved frontend roadmap JSON for a course."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
@@ -1247,6 +1265,7 @@ async def get_course_roadmap(course_id: str) -> dict[str, Any] | None:
 
 
 async def save_master_roadmap(course_id: str, roadmap: dict[str, Any]) -> dict[str, Any]:
+    """Upsert the source roadmap used before course modules are derived."""
     async with get_conn() as conn:
         await conn.execute(
             """
@@ -1262,6 +1281,7 @@ async def save_master_roadmap(course_id: str, roadmap: dict[str, Any]) -> dict[s
 
 
 async def get_master_roadmap(course_id: str) -> dict[str, Any] | None:
+    """Load the saved source roadmap JSON for a course."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
@@ -1283,6 +1303,7 @@ async def get_master_roadmap(course_id: str) -> dict[str, Any] | None:
 
 
 def _module_payload(row, recommended_id: str | None = None) -> dict[str, Any]:
+    """Convert a course_modules row into the frontend module response shape."""
     data = dict(row)
     data["prerequisites"] = _json_value(data.get("prerequisites"), [])
     data["module_metadata"] = _json_value(data.get("module_metadata"), {})
@@ -1295,6 +1316,7 @@ def _module_payload(row, recommended_id: str | None = None) -> dict[str, Any]:
 
 
 async def list_course_modules(course_id: str) -> list[dict[str, Any]]:
+    """Return all modules for a course, marking the next unfinished module."""
     async with get_conn() as conn:
         rows = await conn.fetch(
             """
@@ -1350,6 +1372,7 @@ async def get_eval_summaries_for_course(
 
 
 async def list_course_modules_for_student(course_id: str, student_id: str) -> list[dict[str, Any]]:
+    """Return course modules only after confirming the course belongs to the student."""
     course = await get_course_for_student(course_id, student_id)
     if not course:
         return []
@@ -1371,6 +1394,7 @@ async def list_course_modules_for_student(course_id: str, student_id: str) -> li
 
 
 async def get_course_module(course_id: str, module_id: str) -> dict[str, Any] | None:
+    """Return one course module with decoded metadata and recommendation state."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM course_modules WHERE course_id=$1 AND id=$2",
@@ -1389,6 +1413,7 @@ async def get_course_module_for_student(
     module_id: str,
     student_id: str,
 ) -> dict[str, Any] | None:
+    """Return one module only when the enclosing course belongs to the student."""
     course = await get_course_for_student(course_id, student_id)
     if not course:
         return None
@@ -1396,6 +1421,7 @@ async def get_course_module_for_student(
 
 
 async def set_module_status(course_id: str, module_id: str, status: str) -> None:
+    """Update a module status and recalculate overall course progress."""
     async with get_conn() as conn:
         await conn.execute(
             """
@@ -1417,6 +1443,7 @@ async def save_module_content(
     questions: list[dict[str, Any]] | None = None,
     videos: list[dict[str, Any]] | None = None,
 ) -> None:
+    """Persist generated lesson markdown, optional videos, and optional questions."""
     async with get_conn() as conn:
         await conn.execute(
             """
@@ -1461,6 +1488,7 @@ async def save_module_questions(
     module_id: str,
     questions: list[dict[str, Any]],
 ) -> None:
+    """Replace saved grounded questions for one course module."""
     async with get_conn() as conn:
         await conn.execute(
             "DELETE FROM module_questions WHERE course_id=$1 AND module_id=$2",
@@ -1491,6 +1519,7 @@ async def save_module_questions(
 
 
 async def get_module_questions(course_id: str, module_id: str) -> list[dict[str, Any]]:
+    """Return saved grounded questions for one course module."""
     async with get_conn() as conn:
         rows = await conn.fetch(
             """
@@ -1519,6 +1548,7 @@ async def record_module_chat_message(
     related_concepts: list[str] | None = None,
     possible_missing_prerequisites: list[str] | None = None,
 ) -> dict[str, Any]:
+    """Persist one module chat message and return the saved payload shape."""
     msg_id = str(uuid.uuid4())
     related_concepts = related_concepts or []
     possible_missing_prerequisites = possible_missing_prerequisites or []
@@ -1554,6 +1584,7 @@ async def record_module_chat_message(
 
 
 async def list_module_chat_history(course_id: str, module_id: str) -> list[dict[str, Any]]:
+    """Return all chat messages saved for one course module."""
     async with get_conn() as conn:
         rows = await conn.fetch(
             """
@@ -1580,6 +1611,7 @@ async def list_module_chat_history_for_student(
     module_id: str,
     student_id: str,
 ) -> list[dict[str, Any]]:
+    """Return module chat history filtered to the owning student."""
     async with get_conn() as conn:
         rows = await conn.fetch(
             """
@@ -1609,6 +1641,7 @@ async def record_doubt(
     doubt_text: str,
     doubt_type: str,
 ) -> None:
+    """Persist one side-chat or lesson doubt as adaptation evidence."""
     async with get_conn() as conn:
         await conn.execute(
             """
@@ -1633,6 +1666,7 @@ async def upsert_student_skill(
     status: str,
     evidence: dict[str, Any] | None = None,
 ) -> None:
+    """Upsert one skill-graph node from evaluation or course evidence."""
     async with get_conn() as conn:
         await conn.execute(
             """
@@ -1655,6 +1689,7 @@ async def upsert_student_skill(
 
 
 async def get_student_dashboard(student_id: str) -> dict[str, Any]:
+    """Build the dashboard summary from courses, mastery, doubts, and metacognition."""
     courses = await list_courses(student_id)
     async with get_conn() as conn:
         mastery_rows = await conn.fetch(
@@ -1704,6 +1739,7 @@ async def get_student_dashboard(student_id: str) -> dict[str, Any]:
 
 
 async def get_student_skills(student_id: str) -> dict[str, Any]:
+    """Return mastery and skill rows as graph-ready skill nodes."""
     async with get_conn() as conn:
         mastery_rows = await conn.fetch(
             """
@@ -1747,6 +1783,7 @@ async def get_student_skills(student_id: str) -> dict[str, Any]:
 
 
 async def get_student_doubts(student_id: str) -> list[dict[str, Any]]:
+    """Return the student's doubt log in newest-first order."""
     async with get_conn() as conn:
         rows = await conn.fetch(
             """
@@ -1761,6 +1798,7 @@ async def get_student_doubts(student_id: str) -> list[dict[str, Any]]:
 
 
 async def get_course_decision_log(course_id: str) -> list[dict[str, Any]]:
+    """Return recent agent decisions associated with a course or its session."""
     async with get_conn() as conn:
         course = await conn.fetchrow(
             "SELECT student_id, curriculum_id FROM courses WHERE id=$1",
@@ -1791,6 +1829,7 @@ async def get_course_decision_log(course_id: str) -> list[dict[str, Any]]:
 
 
 async def save_evaluation_session(session: dict[str, Any]) -> None:
+    """Upsert the mutable state for one module evaluation session."""
     async with get_conn() as conn:
         await conn.execute(
             """
@@ -1820,6 +1859,7 @@ async def save_evaluation_session(session: dict[str, Any]) -> None:
 
 
 async def get_evaluation_session(session_id: str) -> dict[str, Any] | None:
+    """Load an evaluation session and decode its JSON columns."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM evaluation_sessions WHERE session_id=$1", session_id
@@ -1836,6 +1876,7 @@ async def get_evaluation_session_for_student(
     session_id: str,
     student_id: str,
 ) -> dict[str, Any] | None:
+    """Load an evaluation session only when it belongs to the student."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
@@ -1856,6 +1897,7 @@ async def get_evaluation_session_for_student(
 async def get_latest_evaluation_session(
     course_id: str, module_id: str
 ) -> dict[str, Any] | None:
+    """Return the newest evaluation session saved for a course module."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
@@ -1878,6 +1920,7 @@ async def get_latest_evaluation_session_for_student(
     module_id: str,
     student_id: str,
 ) -> dict[str, Any] | None:
+    """Return the newest module evaluation visible to the owning student."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """
@@ -1906,6 +1949,7 @@ async def get_latest_evaluation_session_for_student(
 async def save_adaptation_summary(
     student_id: str, course_id: str, module_id: str, summary: dict[str, Any]
 ) -> None:
+    """Persist compact adaptation notes for future lessons in this module."""
     async with get_conn() as conn:
         await conn.execute(
             """
@@ -1922,6 +1966,7 @@ async def save_adaptation_summary(
 async def get_adaptation_summary(
     student_id: str, course_id: str, module_id: str | None = None
 ) -> dict[str, Any] | None:
+    """Load adaptation notes for one module or the latest course-level summary."""
     async with get_conn() as conn:
         if module_id:
             row = await conn.fetchrow(
@@ -2030,6 +2075,7 @@ async def get_prev_module(course_id: str, current_module_id: str) -> dict[str, A
 async def save_course_completion_report(
     course_id: str, student_id: str, report: dict[str, Any]
 ) -> None:
+    """Save the final report generated after a student completes a course."""
     async with get_conn() as conn:
         await conn.execute(
             """
@@ -2045,6 +2091,7 @@ async def save_course_completion_report(
 async def get_course_completion_report(
     course_id: str, student_id: str
 ) -> dict[str, Any] | None:
+    """Return the saved course completion report for the owning student."""
     async with get_conn() as conn:
         row = await conn.fetchrow(
             """

@@ -1,3 +1,5 @@
+"""Google OAuth and cookie-session helpers for the frontend API."""
+
 from __future__ import annotations
 
 import secrets
@@ -26,23 +28,30 @@ STATE_COOKIE_MAX_AGE_SECONDS = 600
 
 
 class _HttpxGoogleAuthResponse(transport.Response):
+    """Adapter that exposes an httpx response through google-auth's transport API."""
+
     def __init__(self, response: httpx.Response):
         self._response = response
 
     @property
     def status(self) -> int:
+        """HTTP status code expected by google-auth."""
         return self._response.status_code
 
     @property
     def headers(self) -> dict[str, str]:
+        """Response headers exposed in google-auth's expected shape."""
         return dict(self._response.headers)
 
     @property
     def data(self) -> bytes:
+        """Raw response body consumed by google-auth verification."""
         return self._response.content
 
 
 class _HttpxGoogleAuthRequest(transport.Request):
+    """google-auth request adapter backed by a short-lived httpx client."""
+
     def __call__(
         self,
         url: str,
@@ -58,10 +67,12 @@ class _HttpxGoogleAuthRequest(transport.Request):
 
 
 def _state_cookie_name() -> str:
+    """Return the OAuth state cookie name derived from the session cookie name."""
     return f"{settings.session_cookie_name}_oauth_state"
 
 
 def _require_auth_config() -> None:
+    """Ensure all Google OAuth and session settings are present before redirecting."""
     missing = [
         name
         for name, value in {
@@ -81,6 +92,7 @@ def _require_auth_config() -> None:
 
 
 def _encode_jwt(payload: dict[str, Any], max_age_seconds: int) -> str:
+    """Encode a signed JWT with issued-at and expiry timestamps."""
     now = int(time.time())
     return jwt.encode(
         {
@@ -94,6 +106,7 @@ def _encode_jwt(payload: dict[str, Any], max_age_seconds: int) -> str:
 
 
 def _decode_jwt(token: str) -> dict[str, Any] | None:
+    """Decode a signed JWT and return None when validation fails."""
     try:
         payload = jwt.decode(
             token,
@@ -106,6 +119,7 @@ def _decode_jwt(token: str) -> dict[str, Any] | None:
 
 
 def _create_state_token(state: str) -> str:
+    """Create the short-lived JWT stored in the OAuth state cookie."""
     return _encode_jwt(
         {
             "typ": "oauth_state",
@@ -116,6 +130,7 @@ def _create_state_token(state: str) -> str:
 
 
 def _validate_state(request: Request, state: str | None) -> None:
+    """Validate the OAuth state query parameter against the signed state cookie."""
     if not state:
         raise HTTPException(status_code=400, detail="Missing OAuth state")
 
@@ -131,6 +146,7 @@ def _validate_state(request: Request, state: str | None) -> None:
 
 
 def _create_session_token(user: dict[str, Any]) -> str:
+    """Create the signed browser session token from a persisted user profile."""
     return _encode_jwt(
         {
             "typ": "session",
@@ -145,6 +161,7 @@ def _create_session_token(user: dict[str, Any]) -> str:
 
 
 def _session_user_from_request(request: Request) -> dict[str, Any] | None:
+    """Read and validate the session cookie, returning the user payload if present."""
     if not settings.session_secret_key:
         return None
 
@@ -168,10 +185,12 @@ def _session_user_from_request(request: Request) -> dict[str, Any] | None:
 
 
 def get_current_user(request: Request) -> dict[str, Any] | None:
+    """Return the authenticated user payload for optional-auth dependencies."""
     return _session_user_from_request(request)
 
 
 def require_current_user(request: Request) -> dict[str, Any]:
+    """FastAPI dependency that rejects unauthenticated frontend API requests."""
     user = get_current_user(request)
     if not user or not user.get("student_id"):
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -179,6 +198,7 @@ def require_current_user(request: Request) -> dict[str, Any]:
 
 
 def _verify_google_id_token(token: str) -> dict[str, Any]:
+    """Verify the Google ID token and enforce the configured OAuth audience."""
     id_info = google_id_token.verify_oauth2_token(
         token,
         _HttpxGoogleAuthRequest(),
@@ -191,6 +211,7 @@ def _verify_google_id_token(token: str) -> dict[str, Any]:
 
 @router.get("/auth/google/login")
 async def google_login():
+    """Redirect the browser to Google OAuth and set a signed state cookie."""
     _require_auth_config()
     state = secrets.token_urlsafe(32)
     params = {
@@ -220,6 +241,7 @@ async def google_callback(
     state: str | None = Query(default=None),
     error: str | None = Query(default=None),
 ):
+    """Handle Google OAuth callback, persist the user, and set the session cookie."""
     _require_auth_config()
     if error:
         raise HTTPException(status_code=400, detail=f"Google OAuth error: {error}")
@@ -291,6 +313,7 @@ async def google_callback(
 
 @router.get("/api/auth/me")
 async def auth_me(request: Request):
+    """Return the current cookie-authenticated user for the frontend."""
     user = _session_user_from_request(request)
     if not user:
         return {"authenticated": False, "user": None}
@@ -299,6 +322,7 @@ async def auth_me(request: Request):
 
 @router.post("/api/auth/logout")
 async def logout():
+    """Clear the browser session and OAuth state cookies."""
     response = JSONResponse({"success": True})
     response.delete_cookie(
         key=settings.session_cookie_name,

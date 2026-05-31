@@ -30,9 +30,13 @@ from config import settings
 # ── Custom exceptions ─────────────────────────────────────────────────────────
 
 class GroqTimeoutError(Exception):
+    """Raised when a Groq completion or stream exceeds the configured timeout."""
+
     pass
 
 class GroqRateLimitError(Exception):
+    """Raised after Groq rate-limit retries are exhausted."""
+
     pass
 
 
@@ -55,7 +59,7 @@ def _parse_tool_args(raw: str) -> dict | list:
             parsed = ast.literal_eval(raw.strip())
             return parsed if isinstance(parsed, (dict, list)) else {}
         except (ValueError, SyntaxError):
-            logger.warning("Tool args parse failed — raw: {}", raw[:160])
+            logger.warning("Tool args parse failed ({} chars).", len(raw))
             return {}
 
 
@@ -108,6 +112,7 @@ def _recover_tool_call_from_text(text: str) -> tuple[str, dict | list] | None:
 _client: Groq | None = None
 
 def get_client() -> Groq:
+    """Return the process-wide Groq SDK client."""
     global _client
     if _client is None:
         _client = Groq(api_key=settings.groq_api_key)
@@ -184,6 +189,7 @@ async def generate(
     full_messages.extend(messages)
 
     def _call():
+        """Perform one Groq chat completion request for plain generation."""
         kwargs: dict = {
             "model": model,
             "messages": full_messages,
@@ -253,6 +259,7 @@ async def tool_call_loop(
     max_iterations = 20  # safety cap — prevent infinite loops
 
     def _filter_terminal_args(tool_name: str, args_obj: dict | list) -> dict:
+        """Keep only arguments declared by the terminal tool schema."""
         args_dict = args_obj if isinstance(args_obj, dict) else {}
         terminal_tool_schema = next(
             (t for t in tools if t["function"]["name"] == tool_name), None
@@ -266,6 +273,7 @@ async def tool_call_loop(
         return args_dict
 
     async def _execute_non_terminal(tool_name: str, args_obj: dict | list) -> str:
+        """Execute one or more non-terminal tool calls and stringify their results."""
         if not tool_executor:
             return f"Tool '{tool_name}' executed (no executor provided)."
 
@@ -290,6 +298,7 @@ async def tool_call_loop(
         logger.debug("tool_call_loop iteration {}", iteration + 1)
 
         def _call():
+            """Perform one Groq chat completion request for the tool loop."""
             return client.chat.completions.create(
                 model=model,
                 messages=messages,
@@ -357,12 +366,18 @@ async def tool_call_loop(
             for tool_call in message.tool_calls:
                 name = tool_call.function.name
                 args_str = tool_call.function.arguments
-                logger.info("LLM called tool: {} args: {}", name, args_str[:120])
 
                 # Parse args_str to dict — with safe fallback for malformed JSON.
                 # Strategy: fix known Python-literal issues first (True/False/None),
                 # then parse. Never use regex to strip structure — that corrupts valid args.
                 args_obj = _parse_tool_args(args_str)
+                arg_keys = list(args_obj.keys()) if isinstance(args_obj, dict) else []
+                logger.info(
+                    "LLM called tool: {} args_type={} arg_keys={}",
+                    name,
+                    type(args_obj).__name__,
+                    arg_keys,
+                )
 
                 # Check for terminal tool BEFORE executing
                 if name == terminal_tool_name:

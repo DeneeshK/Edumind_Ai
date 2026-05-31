@@ -1,3 +1,11 @@
+"""Offline runner for calculating evaluation metrics from a JSON fixture.
+
+The runner is designed for local validation and report generation outside a
+live FastAPI session. It imports metric modules safely, marks unavailable
+metrics when API keys or optional dependencies are missing, and writes the same
+TXT report format used by stored evaluation reports.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -19,10 +27,13 @@ MISSING_ENV_SENTINEL = "__edumind_offline_missing__"
 
 
 class MissingInputError(Exception):
+    """Raised when a metric cannot run because its fixture input is absent."""
+
     pass
 
 
 def _not_available(reason: str) -> dict:
+    """Return the standard metric payload for skipped or unavailable metrics."""
     return {
         "status": "not_available",
         "reason": reason,
@@ -31,6 +42,7 @@ def _not_available(reason: str) -> dict:
 
 
 def _load_env_file_values() -> None:
+    """Load local .env values into os.environ without overriding existing values."""
     backend_root = Path(__file__).resolve().parents[1]
     candidates = [Path.cwd() / ".env", backend_root / ".env"]
     for env_path in candidates:
@@ -48,6 +60,7 @@ def _load_env_file_values() -> None:
 
 
 def _prepare_env_for_metric_imports() -> None:
+    """Set safe placeholder environment values before importing app settings."""
     _load_env_file_values()
     os.environ.setdefault("DATABASE_URL", "postgresql://offline:offline@localhost:5432/offline")
     os.environ.setdefault("GROQ_API_KEY", MISSING_ENV_SENTINEL)
@@ -55,6 +68,7 @@ def _prepare_env_for_metric_imports() -> None:
 
 
 def _has_real_api_key(env_name: str) -> bool:
+    """Return whether an environment variable looks like a real API key."""
     value = os.environ.get(env_name, "").strip()
     if not value or value == MISSING_ENV_SENTINEL:
         return False
@@ -64,6 +78,7 @@ def _has_real_api_key(env_name: str) -> bool:
 
 
 def _missing_dependency(dependencies: tuple[str, ...]) -> str | None:
+    """Return the first missing optional Python dependency, if any."""
     for dependency in dependencies:
         if importlib.util.find_spec(dependency) is None:
             return dependency
@@ -71,6 +86,7 @@ def _missing_dependency(dependencies: tuple[str, ...]) -> str | None:
 
 
 def _get(data: dict, dotted_path: str, default: Any = None) -> Any:
+    """Read a dotted path from a nested fixture dictionary."""
     current: Any = data
     for key in dotted_path.split("."):
         if not isinstance(current, dict) or key not in current:
@@ -80,6 +96,7 @@ def _get(data: dict, dotted_path: str, default: Any = None) -> Any:
 
 
 def _require(data: dict, dotted_path: str) -> Any:
+    """Read a required dotted-path value or raise MissingInputError."""
     value = _get(data, dotted_path)
     if value is None:
         raise MissingInputError(dotted_path)
@@ -87,6 +104,7 @@ def _require(data: dict, dotted_path: str) -> Any:
 
 
 def _require_any(data: dict, dotted_paths: tuple[str, ...], input_name: str) -> Any:
+    """Return the first available value from several accepted fixture paths."""
     for dotted_path in dotted_paths:
         value = _get(data, dotted_path)
         if value is not None:
@@ -95,6 +113,7 @@ def _require_any(data: dict, dotted_paths: tuple[str, ...], input_name: str) -> 
 
 
 def _missing_input_reason(exc: MissingInputError) -> str:
+    """Convert a missing-input exception into a report-friendly reason string."""
     reason = str(exc)
     if reason.startswith("missing "):
         return reason
@@ -102,6 +121,7 @@ def _missing_input_reason(exc: MissingInputError) -> str:
 
 
 def _require_scoring_consistency_qa_log(data: dict) -> list[dict]:
+    """Return the QA log required by scoring-consistency metrics."""
     qa_log = _require(data, "evaluator.qa_log")
     if not isinstance(qa_log, list) or not qa_log:
         raise MissingInputError("evaluator.qa_log")
@@ -114,6 +134,7 @@ def _require_scoring_consistency_qa_log(data: dict) -> list[dict]:
 
 
 def _score_from_result(result: Any) -> float | None:
+    """Extract a numeric score from a metric result payload."""
     if isinstance(result, dict):
         if result.get("status") == "not_available":
             return None
@@ -126,6 +147,7 @@ def _score_from_result(result: Any) -> float | None:
 
 
 def _normalize_metric_result(result: Any) -> dict:
+    """Convert metric exceptions/errors into not-available result payloads."""
     if not isinstance(result, dict):
         return {"score": result, "details": {}}
 
@@ -146,6 +168,13 @@ async def safe_metric(
     dependencies: tuple[str, ...] = (),
     **kwargs,
 ) -> dict:
+    """
+    Run one metric defensively and return a reportable payload.
+
+    Missing API keys, optional dependencies, missing fixture inputs, import
+    errors, and metric exceptions are represented as `not_available` instead of
+    failing the whole offline report.
+    """
     try:
         if fn is None:
             return _not_available("function not implemented")
@@ -168,10 +197,12 @@ async def safe_metric(
 
 
 async def _noop_record_metric(*args, **kwargs) -> None:
+    """Replacement collector used so offline metric calls do not write to DB."""
     return None
 
 
 def _import_metric_modules() -> dict[str, Any]:
+    """Import metric modules after preparing safe local environment defaults."""
     _prepare_env_for_metric_imports()
     modules: dict[str, Any] = {}
     for module_name in (
@@ -195,6 +226,7 @@ def _import_metric_modules() -> dict[str, Any]:
 
 
 def _metric_fn(modules: dict[str, Any], module_name: str, function_name: str) -> Callable | None:
+    """Return a metric function from an imported module, if available."""
     module = modules.get(module_name)
     if isinstance(module, ImportError) or module is None:
         return None
@@ -206,6 +238,7 @@ async def _store_metric(
     key: str,
     build_call: Callable[[], tuple[Callable | None, tuple, dict]],
 ) -> None:
+    """Build, run, and store one metric result under calculated_metrics."""
     try:
         fn, args, kwargs = build_call()
         result = await safe_metric(key, fn, *args, **kwargs)
@@ -215,6 +248,7 @@ async def _store_metric(
 
 
 def _metric_scores(output: dict, keys: tuple[str, ...]) -> list[float]:
+    """Collect available scores for a group of metric keys."""
     calculated = output.get("calculated_metrics", {})
     scores: list[float] = []
     for key in keys:
@@ -226,6 +260,7 @@ def _metric_scores(output: dict, keys: tuple[str, ...]) -> list[float]:
 
 
 def _average_with_runner_formula(modules: dict[str, Any], scores: list[float]) -> float | None:
+    """Average scores using EvaluationRunner's helper when it is importable."""
     runner_module = modules.get("runner")
     if isinstance(runner_module, ImportError) or runner_module is None:
         return sum(scores) / len(scores) if scores else None
@@ -241,6 +276,7 @@ def _system_score_with_runner_formula(
     agent_score: float | None,
     outcome_score: float | None,
 ) -> float | None:
+    """Compute system score with the runtime formula when available."""
     runner_module = modules.get("runner")
     runner_cls = None if isinstance(runner_module, ImportError) else getattr(runner_module, "EvaluationRunner", None)
     if runner_cls is None:
@@ -265,6 +301,7 @@ def _system_score_with_runner_formula(
 
 
 def load_fixture(input_path: str | Path | None = None) -> dict:
+    """Load the offline evaluation fixture JSON."""
     path = Path(input_path) if input_path else DEFAULT_FIXTURE
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
@@ -274,6 +311,7 @@ async def run_offline_evaluation_async(
     input_path: str | Path | None = None,
     output_dir: str = DEFAULT_OUTPUT_DIR,
 ) -> str:
+    """Run all offline metrics and write a TXT report."""
     fixture = load_fixture(input_path)
     modules = _import_metric_modules()
 
@@ -555,10 +593,12 @@ def run_offline_evaluation(
     input_path: str | Path | None = None,
     output_dir: str = DEFAULT_OUTPUT_DIR,
 ) -> str:
+    """Synchronous wrapper around the async offline evaluation runner."""
     return asyncio.run(run_offline_evaluation_async(input_path, output_dir))
 
 
 def main(argv: list[str] | None = None) -> str:
+    """CLI entry point for generating an offline evaluation report."""
     parser = argparse.ArgumentParser(description="Run EduMind offline evaluation metrics.")
     parser.add_argument(
         "input_path",

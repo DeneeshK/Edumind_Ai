@@ -2,6 +2,11 @@
 agents/adaptation_engine.py
 AdaptationEngine — reads EvaluationReport + StudentState, decides next action.
 
+The engine is the policy layer after evaluation. It combines deterministic
+score thresholds with optional LLM/tool analysis, then emits an
+AdaptationDecision that tells the orchestrator whether to advance, reteach,
+detour into a prerequisite, escalate, compress, or hold.
+
 Terminal tool: submit_decision
 Non-terminal tools: analyse_metacognition, check_prerequisites
 """
@@ -16,6 +21,15 @@ from config import settings
 
 
 class AdaptationEngine(BaseAgent):
+    """
+    Decide the student's next learning route after an evaluation.
+
+    The class uses the shared BaseAgent tool loop for analysis, but the final
+    action is constrained by explicit product rules in `_explicit_decision`.
+    That keeps the adaptive policy stable even when the LLM returns an
+    incomplete or overly creative recommendation.
+    """
+
     NAME = "adaptation_engine"
     TERMINAL_TOOL = "submit_decision"
 
@@ -99,15 +113,16 @@ class AdaptationEngine(BaseAgent):
 
     async def run_gap_analysis(self) -> str | None:
         """
-        Every 3 evaluation cycles, analyse the session's evaluation history
-        for a pattern of weakness indicating a missing prerequisite.
+        Inspect recent evaluation history for a repeated prerequisite gap.
 
-        This is a genuine agentic call: the LLM receives the full eval history
-        and uses the check_prerequisites tool before deciding whether a gap
-        exists and what concept is missing.
+        The analysis runs only every third completed evaluation and only when
+        at least two of the last three reports are weak. When those gates pass,
+        the LLM receives the recent evaluation pattern and may use
+        `check_prerequisites` before returning a candidate missing concept.
 
         Returns:
-            The missing concept name if a gap is found, else None.
+            The missing prerequisite concept if a DETOUR pattern is detected;
+            otherwise None.
         """
         # Only run every 3 completed evaluations
         if self.state.evaluation_cycle_count == 0:
@@ -187,6 +202,14 @@ concept name (e.g. "function closures", "matrix multiplication", "gradient desce
     # ── Tool executor ─────────────────────────────────────────────────────────
 
     async def _execute_tool(self, tool_name: str, args: dict) -> str:
+        """
+        Execute analysis tools exposed to the adaptation LLM.
+
+        The returned strings are intentionally compact summaries, not raw state
+        dumps. They give the model enough context to reason about calibration,
+        style, fatigue, reteach risk, and prerequisites without exposing the
+        entire student profile.
+        """
         meta = self.state.metacognition
 
         if tool_name == "analyse_metacognition":
@@ -254,6 +277,12 @@ concept name (e.g. "function closures", "matrix multiplication", "gradient desce
         return await super()._execute_tool(tool_name, args)
 
     def _alternate_style(self) -> str:
+        """
+        Pick a reteach style different from the current preferred style.
+
+        This prevents RETEACH from repeating the same presentation style after
+        the student has already struggled with the concept.
+        """
         order = ["formal", "analogy", "example_first", "visual", "story"]
         current = self.state.metacognition.preferred_style
         for style in order:
@@ -262,6 +291,17 @@ concept name (e.g. "function closures", "matrix multiplication", "gradient desce
         return "example_first"
 
     def _first_weak_prerequisite(self, concept: str) -> str | None:
+        """
+        Return the first prerequisite below the student's advance threshold.
+
+        Args:
+            concept: Concept being evaluated. Used for call-site clarity; the
+                current module supplies the prerequisite list.
+
+        Returns:
+            The first weak prerequisite name, or None when all prerequisites are
+            already above threshold or no module is active.
+        """
         module = self._current_module()
         prereqs = module.prerequisites if module else []
         for prereq in prereqs:
@@ -275,8 +315,15 @@ concept name (e.g. "function closures", "matrix multiplication", "gradient desce
         llm_result: dict | None = None,
     ) -> tuple[str, str, str | None, str | None, dict]:
         """
-        Apply the product rules directly. The LLM may provide missing_concept
-        wording, but it cannot override the score/threshold decision boundary.
+        Apply deterministic adaptation policy after optional LLM analysis.
+
+        The LLM result may contribute wording such as `missing_concept` or
+        `style_for_reteach`, but it cannot override mastery thresholds,
+        escalation rules, or the evaluator's explicit HOLD/COMPRESS signals.
+
+        Returns:
+            A tuple of action, reason, reteach style, missing prerequisite, and
+            metacognition updates ready to persist on StudentState.
         """
         llm_result = llm_result or {}
         meta = self.state.metacognition
@@ -366,13 +413,18 @@ concept name (e.g. "function closures", "matrix multiplication", "gradient desce
 
     async def decide(self, report: EvaluationReport) -> AdaptationDecision:
         """
-        Analyse an EvaluationReport and decide the next action.
+        Analyse an EvaluationReport and persist the next adaptation decision.
+
+        The method first asks the reasoning model for analysis through the
+        agent tool loop. If that call fails, the deterministic policy still
+        produces a decision from the evaluation report and current student
+        state. The final decision is logged to `state.session_decisions`.
 
         Args:
-            report: EvaluationReport from EvaluatorAgent
+            report: Evaluation result for the current concept.
 
         Returns:
-            AdaptationDecision (also logged to state.session_decisions)
+            AdaptationDecision for the orchestrator's next action.
         """
         meta = self.state.metacognition
         module = self._current_module()
@@ -441,7 +493,8 @@ METACOGNITION UPDATE RULES:
             self._explicit_decision(report, result)
         )
 
-        # ── Apply metacognition updates ───────────────────────────────────────
+        # Apply only the small metacognition fields returned by policy. Full
+        # profile persistence is handled by the session flush path.
         if isinstance(meta_updates, dict):
             if "consecutive_reteach_count" in meta_updates:
                 meta.consecutive_reteach_count = int(meta_updates["consecutive_reteach_count"])

@@ -27,6 +27,7 @@ _embedder = None
 _reranker = None
 
 def _get_embedder():
+    """Placeholder for the disabled BGE-M3 embedder singleton."""
     # V1: disabled — BGE-M3 uses ~2.2 GB RAM on CPU, causes EC2 crashes.
     # V2: re-enable when moving to a memory-optimised instance.
     raise RuntimeError("BGE-M3 embedder is disabled in V1. See db/chromadb_client.py.")
@@ -39,6 +40,7 @@ def _get_embedder():
     # return _embedder                                          # V2
 
 def _get_reranker():
+    """Placeholder for the disabled BGE reranker singleton."""
     # V1: disabled — BGE Reranker Large uses ~1.2 GB RAM on CPU.
     # V2: re-enable alongside _get_embedder().
     raise RuntimeError("BGE Reranker is disabled in V1. See db/chromadb_client.py.")
@@ -54,6 +56,7 @@ _chroma_client = None
 _collections: dict = {}
 
 def _get_chroma():
+    """Placeholder for the disabled ChromaDB persistent client."""
     # V1: disabled — ChromaDB HNSW index uses ~300-500 MB RAM.
     # V2: re-enable with chromadb import above.
     raise RuntimeError("ChromaDB client is disabled in V1. See db/chromadb_client.py.")
@@ -63,10 +66,11 @@ def _get_chroma():
     #         path=settings.chromadb_path,                      # V2
     #         settings=ChromaSettings(anonymized_telemetry=False), # V2
     #     )                                                      # V2
-    #     logger.info("ChromaDB client initialised at '{}'", settings.chromadb_path)  # V2
+    #     logger.info("ChromaDB client initialised.")  # V2
     # return _chroma_client                                     # V2
 
 def _get_collection(domain: str):
+    """Return a sanitized ChromaDB collection when vector storage is re-enabled."""
     # Sanitize: keep only alphanumerics/underscores/hyphens, collapse spaces.
     # Truncate to 40 chars before adding the "_bge_m3" suffix (7 chars)
     # so the final name stays within ChromaDB's 63-char limit.
@@ -140,7 +144,7 @@ async def search(
     #     query_kwargs["where"] = where                        # V2
     # results = await asyncio.to_thread(lambda: collection.query(**query_kwargs))  # V2
     # docs = results.get("documents", [[]])[0]                 # V2
-    # logger.info("ChromaDB search: {} results for '{}' in '{}'", len(docs), query[:60], domain)  # V2
+    # logger.info("ChromaDB search: {} results for domain='{}'", len(docs), domain)  # V2
     # return docs                                              # V2
 
 async def rerank(query: str, chunks: list[str], top_k: int = 5) -> list[str]:

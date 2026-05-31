@@ -1,2 +1,1 @@
-"""Metric implementations for EduMind evaluation."""
-
+"""Metric functions used by EduMind evaluation reports."""

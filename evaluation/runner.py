@@ -1,3 +1,5 @@
+"""Session-level orchestration for evaluation metrics and aggregate reports."""
+
 from __future__ import annotations
 
 import asyncio
@@ -34,6 +36,7 @@ from evaluation.metrics.rag_metrics import (
 
 
 def _avg(values: list[float]) -> float | None:
+    """Return the average of present metric values, or None when empty."""
     clean = [float(v) for v in values if v is not None]
     return sum(clean) / len(clean) if clean else None
 
@@ -62,6 +65,7 @@ class EvaluationRunner:
         self._session_start: datetime = datetime.now(timezone.utc)
 
     def _remember_scores(self, bucket: list[float], results: list) -> None:
+        """Append successful metric scores to an aggregate bucket."""
         for result in results:
             if isinstance(result, Exception):
                 continue
@@ -72,6 +76,7 @@ class EvaluationRunner:
                     pass
 
     def _remember_metric_results(self, named_results: list[tuple[str, object]]) -> None:
+        """Store successful metric payloads by metric name for reporting."""
         for metric_name, result in named_results:
             if isinstance(result, Exception):
                 continue

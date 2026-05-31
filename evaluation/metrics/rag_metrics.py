@@ -1,3 +1,5 @@
+"""Retrieval and lesson-grounding metrics for EduMind evaluation reports."""
+
 from __future__ import annotations
 
 import asyncio
@@ -17,10 +19,12 @@ _embed_model = None
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+    """Clamp a numeric metric value into the configured score range."""
     return max(low, min(high, float(value)))
 
 
 def _tokenize(text: str) -> set[str]:
+    """Tokenize text for lightweight lexical overlap scoring."""
     return {
         token
         for token in re.findall(r"[a-zA-Z][a-zA-Z0-9'-]*", (text or "").lower())
@@ -29,6 +33,7 @@ def _tokenize(text: str) -> set[str]:
 
 
 def _get_embed_model():
+    """Return the evaluation embedding model when semantic metrics are enabled."""
     # V1: disabled — sentence_transformers (~90 MB RAM) hashed out alongside ChromaDB/RAG.
     # V2: uncomment body below.
     return None
@@ -41,6 +46,7 @@ def _get_embed_model():
 
 
 async def _embed_texts(texts: list[str]) -> list[list[float]]:
+    """Embed texts for semantic metrics, or return an empty list while disabled."""
     # V1: disabled alongside embed model. Returns empty — callers handle gracefully.
     return []
     # model = _get_embed_model()                               # V2
@@ -51,6 +57,7 @@ async def _embed_texts(texts: list[str]) -> list[list[float]]:
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
+    """Return cosine similarity normalized to the 0.0-1.0 metric range."""
     if not a or not b:
         return 0.0
     dot = sum(x * y for x, y in zip(a, b))
@@ -62,6 +69,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 async def _semantic_similarity(left: str, right: str) -> float:
+    """Return semantic similarity for two strings when embeddings are available."""
     if not left.strip() or not right.strip():
         return 0.0
     vectors = await _embed_texts([left, right])
@@ -71,6 +79,7 @@ async def _semantic_similarity(left: str, right: str) -> float:
 
 
 async def _similarities(query: str, texts: list[str]) -> list[float]:
+    """Return semantic similarities from one query to many text chunks."""
     clean = [text for text in texts if text and text.strip()]
     if not query.strip() or not clean:
         return []
@@ -82,6 +91,7 @@ async def _similarities(query: str, texts: list[str]) -> list[float]:
 
 
 def _json_score(raw: str) -> dict[str, Any]:
+    """Parse a compact JSON judge response, falling back to the first score token."""
     try:
         match = re.search(r"\{.*\}", raw, flags=re.S)
         if match:
@@ -95,6 +105,7 @@ def _json_score(raw: str) -> dict[str, Any]:
 
 
 async def _llm_judge_score(prompt: str) -> dict[str, Any]:
+    """Call the evaluation judge model and parse its compact score JSON."""
     response = await groq_generate(
         messages=[{"role": "user", "content": prompt}],
         model=settings.eval_judge_model,
@@ -113,6 +124,7 @@ async def hyde_quality_score(
     session_id: str,
     student_id: str,
 ) -> dict:
+    """Score HyDE output alignment with query and concept-card text."""
     metric_name = "hyde_quality"
     try:
         query_alignment = await _semantic_similarity(original_query, hypothetical_answer)
@@ -146,6 +158,7 @@ async def chromadb_precision_at_k(
     session_id: str,
     student_id: str,
 ) -> dict:
+    """Score the relevance of ChromaDB chunks within the configured top-k window."""
     metric_name = "chromadb_precision_at_k"
     try:
         k = max(1, int(settings.eval_precision_k))
@@ -170,6 +183,7 @@ async def chromadb_precision_at_k(
 
 
 def _parse_result_date(result: dict) -> datetime | None:
+    """Parse a publication timestamp from a Tavily-like result dictionary."""
     for key in ("published_date", "published_at", "date", "created_at"):
         value = result.get(key)
         if not value:
@@ -186,6 +200,7 @@ def _parse_result_date(result: dict) -> datetime | None:
 
 
 def _freshness(result: dict) -> float:
+    """Score source freshness with a one-year exponential decay."""
     parsed = _parse_result_date(result)
     if parsed is None:
         return 0.6
@@ -199,6 +214,7 @@ async def tavily_relevance_score(
     session_id: str,
     student_id: str,
 ) -> dict:
+    """Score Tavily results by semantic relevance and source freshness."""
     metric_name = "tavily_relevance"
     try:
         texts = [
@@ -234,6 +250,7 @@ async def reranker_gain_score(
     session_id: str,
     student_id: str,
 ) -> dict:
+    """Score whether reranking improved top-chunk semantic relevance."""
     metric_name = "reranker_gain"
     try:
         before_top = [c for c in chunks_before[: max(1, len(chunks_after))] if c.strip()]
@@ -261,6 +278,7 @@ async def reranker_gain_score(
 
 
 def _lexical_faithfulness(lesson_text: str, retrieved_chunks: list[str]) -> float:
+    """Estimate lesson support using lexical overlap when judge scoring is unavailable."""
     source_tokens = _tokenize("\n".join(retrieved_chunks))
     if not source_tokens:
         return 0.0
@@ -286,6 +304,7 @@ async def rag_faithfulness_score(
     session_id: str,
     student_id: str,
 ) -> dict:
+    """Score whether lesson claims are supported by retrieved context."""
     metric_name = "rag_faithfulness"
     try:
         context = "\n\n".join(retrieved_chunks)[:6000]
