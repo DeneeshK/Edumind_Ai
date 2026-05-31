@@ -18,6 +18,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from agents.course_report_agent import generate_course_report
+from agents.schedule_agent import generate_learning_schedule
 from agents.evaluation_agent import (
     get_session_report,
     start_session as start_eval_session,
@@ -37,6 +38,9 @@ from core.course_service import (
     lesson_videos_from_module,
 )
 from db.postgres import (
+    get_course_schedule,
+    save_course_schedule,
+    update_schedule_module_completion,
     get_course_for_student,
     get_course_module_for_student,
     get_next_module,
@@ -1215,3 +1219,154 @@ async def stream_generate_module(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ── Learning Schedule endpoints ───────────────────────────────────────────────
+
+class GenerateScheduleRequest(BaseModel):
+    """
+    Inputs for learning timetable generation.
+
+    duration_value  — integer number of units (e.g. 3)
+    duration_unit   — "days" | "weeks" | "months"
+    hours_per_day   — hours per day on hour basis only (e.g. 2.0)
+    study_slots     — one or more of: "morning" | "afternoon" | "evening" | "night"
+                      or HH:MM strings like "06:00", "18:30"
+                      (supports multiple slots for split-day learners)
+    start_date      — optional ISO date string "YYYY-MM-DD" (defaults to today)
+    """
+    duration_value: int = Field(..., ge=1, le=365)
+    duration_unit: str = Field(..., pattern="^(days|weeks|months)$")
+    hours_per_day: float = Field(..., ge=0.5, le=16.0)
+    study_slots: list[str] = Field(default_factory=lambda: ["morning"])
+    start_date: str | None = None
+
+
+class UpdateModuleCompletionRequest(BaseModel):
+    module_id: str
+    completed: bool
+
+
+def _validate_slots(slots: list[str]) -> None:
+    valid_named = {"morning", "afternoon", "evening", "night"}
+    for slot in slots:
+        s = slot.strip().lower()
+        if s in valid_named:
+            continue
+        if len(s) == 5 and s[2] == ":" and s[:2].isdigit() and s[3:].isdigit():
+            continue
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Invalid study_slot '{slot}'. "
+                "Use 'morning', 'afternoon', 'evening', 'night', or HH:MM (e.g. '06:00')."
+            ),
+        )
+
+
+@router.post("/courses/{course_id}/schedule/generate")
+async def generate_schedule(
+    course_id: str,
+    req: GenerateScheduleRequest,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    """
+    Generate (or regenerate) a day-by-day learning timetable for a course.
+
+    The reasoning model uses the course module list + your time inputs to produce:
+      - Per-module start/end times (based on chosen study slots)
+      - Day themes and study tips
+      - Overall learning advice and weekly milestones
+      - Completion tracking per module (completed: false initially)
+
+    Overwrites any previously saved schedule for this course.
+    """
+    course = await _require_owned_course(course_id, current_user)
+    sid = _current_student_id(current_user)
+
+    modules = await list_course_modules_for_student(course_id, sid)
+    if not modules:
+        raise HTTPException(
+            status_code=422,
+            detail="Course has no modules yet. Complete course creation first.",
+        )
+
+    _validate_slots(req.study_slots)
+
+    try:
+        schedule = await generate_learning_schedule(
+            course=course,
+            modules=modules,
+            duration_value=req.duration_value,
+            duration_unit=req.duration_unit,
+            hours_per_day=req.hours_per_day,
+            study_slots=[s.strip().lower() for s in req.study_slots],
+            start_date=req.start_date,
+        )
+    except Exception as exc:
+        logger.exception("Schedule generation failed for course {}", course_id)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    await save_course_schedule(
+        schedule_id=schedule["schedule_id"],
+        course_id=course_id,
+        student_id=sid,
+        schedule=schedule,
+    )
+
+    return {"schedule": schedule}
+
+
+@router.get("/courses/{course_id}/schedule")
+async def get_schedule(
+    course_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    """
+    Retrieve the existing learning schedule for a course.
+    Returns 404 if no schedule has been generated yet.
+    """
+    await _require_owned_course(course_id, current_user)
+    sid = _current_student_id(current_user)
+
+    schedule = await get_course_schedule(course_id, sid)
+    if not schedule:
+        raise HTTPException(
+            status_code=404,
+            detail="No schedule found. Use POST /courses/{course_id}/schedule/generate to create one.",
+        )
+    return {"schedule": schedule}
+
+
+@router.patch("/courses/{course_id}/schedule/progress")
+async def update_module_completion(
+    course_id: str,
+    req: UpdateModuleCompletionRequest,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    """
+    Mark a module as completed or uncompleted in the timetable.
+    The frontend calls this when the student ticks/unticks a module —
+    returns the updated schedule so the UI can re-render without a separate GET.
+    """
+    await _require_owned_course(course_id, current_user)
+    sid = _current_student_id(current_user)
+
+    found = await update_schedule_module_completion(
+        course_id=course_id,
+        student_id=sid,
+        module_id=req.module_id,
+        completed=req.completed,
+    )
+    if not found:
+        raise HTTPException(
+            status_code=404,
+            detail="No schedule found for this course. Generate one first.",
+        )
+
+    schedule = await get_course_schedule(course_id, sid)
+    return {
+        "schedule":          schedule,
+        "updated_module_id": req.module_id,
+        "completed":         req.completed,
+    }

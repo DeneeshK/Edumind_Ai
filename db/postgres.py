@@ -409,6 +409,26 @@ CREATE TABLE IF NOT EXISTS course_completion_reports (
 );
 CREATE INDEX IF NOT EXISTS idx_course_completion_reports_student
     ON course_completion_reports(student_id);
+
+-- 25. course_schedules — AI-generated learning timetable per course per student
+CREATE TABLE IF NOT EXISTS course_schedules (
+    id              TEXT PRIMARY KEY,
+    course_id       TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    student_id      TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+    schedule_json   JSONB NOT NULL DEFAULT '{}',
+    total_days      INT NOT NULL DEFAULT 1,
+    hours_per_day   FLOAT NOT NULL DEFAULT 1.0,
+    study_slots     JSONB NOT NULL DEFAULT '[]',
+    start_date      DATE,
+    end_date        DATE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (course_id, student_id)
+);
+CREATE INDEX IF NOT EXISTS idx_course_schedules_student
+    ON course_schedules(student_id);
+CREATE INDEX IF NOT EXISTS idx_course_schedules_course
+    ON course_schedules(course_id);
 """
 
 
@@ -2106,3 +2126,111 @@ async def get_course_completion_report(
         "report": _json_value(row["report_json"], {}),
         "created_at": row["created_at"],
     }
+
+
+# ── Learning Schedule helpers (table 25) ──────────────────────────────────────
+
+async def save_course_schedule(
+    schedule_id: str,
+    course_id: str,
+    student_id: str,
+    schedule: dict[str, Any],
+) -> None:
+    """Upsert the AI-generated learning schedule (one per course per student)."""
+    # asyncpg requires datetime.date objects for DATE columns, not ISO strings
+    from datetime import date as _date
+    def _to_date(val):
+        if val is None:
+            return None
+        if isinstance(val, _date):
+            return val
+        try:
+            return _date.fromisoformat(str(val))
+        except ValueError:
+            return None
+
+    async with get_conn() as conn:
+        await conn.execute(
+            """
+            INSERT INTO course_schedules
+              (id, course_id, student_id, schedule_json,
+               total_days, hours_per_day, study_slots, start_date, end_date)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (course_id, student_id) DO UPDATE
+              SET id=$1,
+                  schedule_json=$4,
+                  total_days=$5,
+                  hours_per_day=$6,
+                  study_slots=$7,
+                  start_date=$8,
+                  end_date=$9,
+                  updated_at=NOW()
+            """,
+            schedule_id,
+            course_id,
+            student_id,
+            json.dumps(schedule),
+            schedule.get("total_days", 1),
+            float(schedule.get("hours_per_day", 1.0)),
+            json.dumps(schedule.get("study_slots", [])),
+            _to_date(schedule.get("start_date")),
+            _to_date(schedule.get("end_date")),
+        )
+
+
+async def get_course_schedule(
+    course_id: str,
+    student_id: str,
+) -> dict[str, Any] | None:
+    """Return the saved learning schedule for a course, or None."""
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT schedule_json, created_at, updated_at
+              FROM course_schedules
+             WHERE course_id=$1 AND student_id=$2
+            """,
+            course_id, student_id,
+        )
+    if not row:
+        return None
+    return {
+        **_json_value(row["schedule_json"], {}),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+async def update_schedule_module_completion(
+    course_id: str,
+    student_id: str,
+    module_id: str,
+    completed: bool,
+) -> bool:
+    """
+    Toggle the completed flag on a specific module inside the schedule JSONB.
+    Returns True if schedule was found and updated.
+    """
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            "SELECT schedule_json FROM course_schedules WHERE course_id=$1 AND student_id=$2",
+            course_id, student_id,
+        )
+        if not row:
+            return False
+
+        schedule = _json_value(row["schedule_json"], {})
+        for day in schedule.get("days", []):
+            for item in day.get("timetable_items", []):
+                if item.get("module_id") == module_id:
+                    item["completed"] = completed
+
+        await conn.execute(
+            """
+            UPDATE course_schedules
+               SET schedule_json=$1, updated_at=NOW()
+             WHERE course_id=$2 AND student_id=$3
+            """,
+            json.dumps(schedule), course_id, student_id,
+        )
+    return True
