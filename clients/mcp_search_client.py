@@ -95,10 +95,12 @@ async def research_web(concept: str, namespace: str, context: str = "") -> dict:
     )
 
 
-async def retrieve(query: str, namespace: str, context: str = "", top_k: int | None = None) -> list[str]:
+async def retrieve_full(query: str, namespace: str, context: str = "", top_k: int | None = None) -> list[dict]:
     """
-    Retrieve grounding chunks for a query. Returns plain text chunks (possibly
-    empty), matching the shape legacy callers expected from the old RAG path.
+    Retrieve grounding chunks for a query, keeping source metadata.
+
+    Returns dicts with content/concept/source_url/source_title/distance
+    (possibly empty), so callers can cite sources rather than just use the text.
     """
     result = await _call(
         "retrieve",
@@ -109,8 +111,27 @@ async def retrieve(query: str, namespace: str, context: str = "", top_k: int | N
             "top_k": top_k or settings.rag_top_k,
         },
     )
-    chunks = result.get("chunks") or []
+    return result.get("chunks") or []
+
+
+async def retrieve(query: str, namespace: str, context: str = "", top_k: int | None = None) -> list[str]:
+    """
+    Retrieve grounding chunks for a query. Returns plain text chunks (possibly
+    empty), matching the shape legacy callers expected from the old RAG path.
+    """
+    chunks = await retrieve_full(query, namespace=namespace, context=context, top_k=top_k)
     return [c.get("content", "") for c in chunks if c.get("content")]
+
+
+async def purge_namespace(namespace: str) -> int:
+    """
+    Delete all stored web-search chunks for a namespace (e.g. a deleted course).
+
+    Returns 0 on any failure (unreachable server, disabled client) rather than
+    raising — a cleanup step must never block the course deletion it's attached to.
+    """
+    result = await _call("purge_namespace", {"namespace": namespace})
+    return int(result.get("chunks_deleted") or 0)
 
 
 # ── Groq tool-loop integration ────────────────────────────────────────────────
@@ -163,12 +184,19 @@ def groq_tools() -> list[dict]:
     ]
 
 
-def make_tool_executor(namespace: str, context: str = ""):
+def make_tool_executor(namespace: str, context: str = "", sources: list[dict] | None = None):
     """
     Build an executor closure that routes the web tools to the MCP server.
 
     Bound to a namespace (course id) so retrieved content is scoped per course.
     Returns compact strings the LLM can read, never raw dumps.
+
+    Args:
+        sources: Optional list the executor appends {title, url} to whenever
+            research_web returns chunks. Passing the same list into multiple
+            calls lets the caller collect citations across a whole tool loop
+            and attach them to the final answer without trusting the LLM to
+            transcribe URLs correctly itself.
     """
     async def _executor(tool_name: str, args: dict) -> str:
         if tool_name == "smoke_search":
@@ -181,10 +209,14 @@ def make_tool_executor(namespace: str, context: str = ""):
             concept = args.get("concept", "")
             query = args.get("query", concept)
             await research_web(concept, namespace=namespace, context=context)
-            chunks = await retrieve(query, namespace=namespace, context=context)
+            chunks = await retrieve_full(query, namespace=namespace, context=context)
             if not chunks:
                 return "No relevant web content was found for that query."
-            joined = "\n\n---\n\n".join(chunks[: settings.rag_top_k])
+            if sources is not None:
+                for c in chunks:
+                    if c.get("source_url"):
+                        sources.append({"title": c.get("source_title", ""), "url": c["source_url"]})
+            joined = "\n\n---\n\n".join(c.get("content", "") for c in chunks[: settings.rag_top_k])
             return f"Retrieved web context (use only what fits):\n{joined[:4000]}"
 
         return f"Unknown tool: {tool_name}"

@@ -1209,7 +1209,14 @@ async def get_course_for_student(course_id: str, student_id: str) -> dict[str, A
 
 
 async def delete_course(course_id: str, student_id: str | None = None) -> bool:
-    """Delete a course and linked curriculum when it is visible to the caller."""
+    """
+    Delete a course and linked curriculum when it is visible to the caller.
+
+    Also purges any web-search RAG chunks stored under this course's namespace
+    in the MCP search server — otherwise they accumulate there indefinitely
+    with no owning course left to reference them. Purge failure (e.g. the MCP
+    server is unreachable) never blocks the course deletion itself.
+    """
     async with get_conn() as conn:
         async with conn.transaction():
             where_student = "AND student_id=$2" if student_id else ""
@@ -1234,6 +1241,14 @@ async def delete_course(course_id: str, student_id: str | None = None) -> bool:
                     row["curriculum_id"],
                     row["student_id"],
                 )
+
+    try:
+        # Lazy import: db/postgres.py is core infra and shouldn't hard-depend on
+        # the MCP client SDK for a codepath most requests never touch.
+        from clients.mcp_search_client import purge_namespace
+        await purge_namespace(course_id)
+    except Exception as exc:
+        logger.warning("Web-search chunk purge failed for course_id={}: {}", course_id, exc)
 
     return True
 

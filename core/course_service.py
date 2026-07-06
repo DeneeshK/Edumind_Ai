@@ -2018,7 +2018,13 @@ async def _answer_doubt_with_web_search(
             },
         }
     ]
-    executor = mcp_search_client.make_tool_executor(namespace=course_id, context=ctx)
+    # Collects {title, url} for every research_web call the LLM makes during the
+    # loop, so the final reply can cite real sources without trusting the LLM to
+    # transcribe URLs itself.
+    collected_sources: list[dict] = []
+    executor = mcp_search_client.make_tool_executor(
+        namespace=course_id, context=ctx, sources=collected_sources
+    )
     try:
         result = await tool_call_loop(
             system=system,
@@ -2029,10 +2035,32 @@ async def _answer_doubt_with_web_search(
             tool_executor=executor,
         )
         reply = (result or {}).get("reply")
-        return reply.strip() if isinstance(reply, str) and reply.strip() else None
+        if not (isinstance(reply, str) and reply.strip()):
+            return None
+        return _append_source_citations(reply.strip(), collected_sources)
     except Exception as exc:
         logger.warning("Web-search doubt loop failed: {} — falling back to grounded answer.", exc)
         return None
+
+
+def _append_source_citations(reply: str, sources: list[dict], limit: int = 4) -> str:
+    """Append a deduplicated 'Sources:' list to a reply when web search was used."""
+    if not sources:
+        return reply
+    seen: set[str] = set()
+    lines = []
+    for s in sources:
+        url = (s.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        title = (s.get("title") or "").strip() or url
+        lines.append(f"- [{title}]({url})")
+        if len(lines) >= limit:
+            break
+    if not lines:
+        return reply
+    return reply + "\n\n**Sources:**\n" + "\n".join(lines)
 
 
 async def answer_module_chat(
