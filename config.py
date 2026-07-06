@@ -126,6 +126,17 @@ class Settings(BaseSettings):
     eval_schedule_monthly: bool = True
     eval_schedule_timezone: str = "Asia/Kolkata"
 
+    # ── Web-search RAG via the MCP server (client side only) ──────────────────
+    # The heavy lifting (Tavily, MiniLM embeddings, pgvector) lives in the
+    # standalone edumind_mcp_search server so this API stays RAM-light. Here we
+    # only hold what the MCP *client* needs. The per-course web-search toggle
+    # gates whether these tools are offered to the agent at all — when a course
+    # has it OFF, none of this runs.
+    mcp_search_server_url: str = "http://127.0.0.1:8900/sse"
+    mcp_search_enabled: bool = True         # master kill-switch for the MCP client
+    web_search_default_on: bool = False     # default toggle when the client omits it
+    rag_top_k: int = 5                      # chunks to request from the server
+
 
 try:
     settings = Settings()

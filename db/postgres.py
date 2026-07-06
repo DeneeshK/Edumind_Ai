@@ -262,6 +262,10 @@ CREATE TABLE IF NOT EXISTS courses (
 CREATE INDEX IF NOT EXISTS idx_courses_student ON courses(student_id);
 ALTER TABLE courses
     ADD COLUMN IF NOT EXISTS personalization_profile JSONB NOT NULL DEFAULT '{}';
+-- Per-course web-search toggle. When FALSE the agent is never offered the MCP
+-- web-search tools, so no Tavily/embedding work runs for that course.
+ALTER TABLE courses
+    ADD COLUMN IF NOT EXISTS web_search_enabled BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- 16. course_modules  ← stable reopenable modules and saved lesson content
 CREATE TABLE IF NOT EXISTS course_modules (
@@ -981,8 +985,14 @@ async def create_course_from_plan(
     pace: str,
     prior_knowledge: str = "",
     personalization_profile: dict[str, Any] | None = None,
+    web_search_enabled: bool | None = None,
 ) -> dict[str, Any]:
-    """Create/update frontend course rows from a CurriculumPlan."""
+    """
+    Create/update frontend course rows from a CurriculumPlan.
+
+    `web_search_enabled=None` means "leave as-is" so background resyncs never
+    clobber a course's toggle; pass an explicit bool only on real creation.
+    """
     course_id = _course_id_for_curriculum(curriculum_id)
     title = _course_title_from_profile(plan, personalization_profile, pace)
     profile_json = json.dumps(personalization_profile or {})
@@ -991,8 +1001,8 @@ async def create_course_from_plan(
             """
             INSERT INTO courses
               (id, student_id, curriculum_id, topic, goal, pace, title,
-               status, prior_knowledge, personalization_profile)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9)
+               status, prior_knowledge, personalization_profile, web_search_enabled)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,COALESCE($10, FALSE))
             ON CONFLICT (id) DO UPDATE
               SET topic=$4, goal=$5, pace=$6, title=$7,
                   status='active', prior_knowledge=$8,
@@ -1000,6 +1010,7 @@ async def create_course_from_plan(
                     WHEN $9::jsonb = '{}'::jsonb THEN courses.personalization_profile
                     ELSE $9::jsonb
                   END,
+                  web_search_enabled=COALESCE($10, courses.web_search_enabled),
                   updated_at=NOW()
             """,
             course_id,
@@ -1011,6 +1022,7 @@ async def create_course_from_plan(
             title,
             prior_knowledge,
             profile_json,
+            web_search_enabled,
         )
 
         for idx, module in enumerate(plan.modules):

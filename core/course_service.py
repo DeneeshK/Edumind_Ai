@@ -20,7 +20,8 @@ from loguru import logger
 from core.metrics import metrics as _metrics
 
 from agents.curriculum_architect import CurriculumArchitectAgent
-from clients.groq_client import generate, stream
+from clients.groq_client import generate, stream, tool_call_loop
+from clients import mcp_search_client
 from clients.tavily_client import search as tavily_search  # V2: re-enable for LLM-triggered Tavily
 from config import settings
 from core.curriculum_quality import (
@@ -784,6 +785,7 @@ async def create_course(
     prior_knowledge: str = "",
     name: str = "Student",
     personalization_profile: dict[str, Any] | None = None,
+    web_search_enabled: bool = False,
 ) -> dict[str, Any]:
     """
     Create a persisted course, modules, master roadmap, and frontend roadmap.
@@ -919,6 +921,7 @@ async def create_course(
         pace=pace,
         prior_knowledge=prior_knowledge,
         personalization_profile=profile,
+        web_search_enabled=web_search_enabled,
     )
 
     master_roadmap = getattr(architect, "_master_roadmap", None)
@@ -969,6 +972,7 @@ async def create_course_events(
     prior_knowledge: str = "",
     name: str = "Student",
     personalization_profile: dict[str, Any] | None = None,
+    web_search_enabled: bool = False,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Stream course-creation progress events and finish with the saved course."""
     yield {"event": "connected", "data": {"message": "connected"}}
@@ -1004,6 +1008,7 @@ async def create_course_events(
             prior_knowledge=prior_knowledge,
             name=name,
             personalization_profile=personalization_profile,
+            web_search_enabled=web_search_enabled,
         )
         for module in course.get("modules", []):
             yield {"event": "module_planned", "data": module}
@@ -1962,6 +1967,74 @@ async def update_metacognition_from_doubt(
     await save_metacognition(student_id, profile)
 
 
+async def _answer_doubt_with_web_search(
+    course: dict[str, Any],
+    module: dict[str, Any],
+    message: str,
+    dtype: str,
+    context: str,
+    history: list[dict[str, Any]],
+) -> str | None:
+    """
+    Answer a doubt with an LLM-driven web-search tool loop.
+
+    The model is grounded in the module content and may call the MCP web-search
+    tools, but only when it decides the question needs external knowledge. Chunks
+    are scoped to this course's namespace. Returns the reply, or None to signal
+    the caller to fall back to the default grounded path (e.g. MCP unreachable or
+    the model produced no answer).
+    """
+    course_id = course.get("id") or ""
+    ctx = (
+        f"Course: {course.get('topic')} | Module concept: {module.get('concept')} "
+        f"| Pace: {course.get('pace', 'medium')}"
+    )
+    system = (
+        "You are EduMind's module chat assistant. Answer the student's doubt clearly "
+        "and stay grounded in the current module content below.\n\n"
+        "You have web-search tools. Use them ONLY when the student's question involves "
+        "a concept you do not recognize, or needs current/external detail the module "
+        "does not cover. In that case call smoke_search first to orient, then "
+        "research_web to fetch grounded sources, then answer. If the module already "
+        "answers the question, do NOT search — just answer.\n"
+        "Always finish by calling the `answer` tool with your final reply. Label any "
+        'content beyond the module as "extra context". Do not invent facts.\n\n'
+        f'MODULE CONTENT:\n"""\n{context[:6000]}\n"""\n\n'
+        f"RECENT CHAT:\n{json.dumps(history[-6:], default=str)}"
+    )
+    tools = mcp_search_client.groq_tools() + [
+        {
+            "type": "function",
+            "function": {
+                "name": "answer",
+                "description": "Provide the final answer to the student's doubt.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reply": {"type": "string", "description": "The final answer to show the student."}
+                    },
+                    "required": ["reply"],
+                },
+            },
+        }
+    ]
+    executor = mcp_search_client.make_tool_executor(namespace=course_id, context=ctx)
+    try:
+        result = await tool_call_loop(
+            system=system,
+            user_message=f"Student doubt: {message}",
+            tools=tools,
+            terminal_tool_name="answer",
+            model=settings.generation_model,
+            tool_executor=executor,
+        )
+        reply = (result or {}).get("reply")
+        return reply.strip() if isinstance(reply, str) and reply.strip() else None
+    except Exception as exc:
+        logger.warning("Web-search doubt loop failed: {} — falling back to grounded answer.", exc)
+        return None
+
+
 async def answer_module_chat(
     course_id: str,
     module_id: str,
@@ -1984,19 +2057,19 @@ async def answer_module_chat(
     context = module.get("content_markdown") or ""
     if not context:
         raise ValueError("Generate the lesson before opening module chat.")
-    rag: list[str] = []  # V1: RAG disabled
-    # try:                                                     # V2
-    #     rag = await retrieve(                                # V2
-    #         query=f"{message} {module['concept']}",          # V2
-    #         domain=infer_domain(course["topic"], course["goal"]),  # V2
-    #         top_k=3,                                         # V2
-    #         course_id=course_id,                             # V2
-    #         student_id=student_id,                           # V2
-    #     )                                                    # V2
-    # except Exception:                                        # V2
-    #     rag = []                                             # V2
+    # Web-search RAG is opt-in per course. When ON, the LLM itself decides
+    # whether it needs to search the web (via the MCP tools) — it only does so
+    # for concepts it doesn't recognize or that need current/external detail.
+    reply: str | None = None
+    if bool(course.get("web_search_enabled")) and mcp_search_client.is_enabled():
+        reply = await _answer_doubt_with_web_search(
+            course=course, module=module, message=message,
+            dtype=dtype, context=context, history=history,
+        )
 
-    prompt = f"""A student asked a doubt in the side chat.
+    if reply is None:
+        # Default grounded path (unchanged): answer from the saved module only.
+        prompt = f"""A student asked a doubt in the side chat.
 
 Course: {course.get('topic')}
 Module: {module.get('title')} / {module.get('concept')}
@@ -2011,21 +2084,18 @@ Current module content is the primary source:
 Recent chat:
 {json.dumps(history[-6:], default=str)}
 
-Retrieved supporting context, use only if it fits the module:
-{chr(10).join(rag[:3])}
-
 Answer simply and clearly. Stay grounded in the current module. If you add
 anything beyond the module, label it as "extra context". Do not invent facts.
 """
-    try:
-        reply = await generate(
-            messages=[{"role": "user", "content": prompt}],
-            model=settings.generation_model,
-            system="You are EduMind's module chat assistant.",
-        )
-    except Exception as exc:
-        logger.warning("Module chat generation failed: {}", exc)
-        reply = "I could not generate a reliable answer right now. Please retry in a moment."
+        try:
+            reply = await generate(
+                messages=[{"role": "user", "content": prompt}],
+                model=settings.generation_model,
+                system="You are EduMind's module chat assistant.",
+            )
+        except Exception as exc:
+            logger.warning("Module chat generation failed: {}", exc)
+            reply = "I could not generate a reliable answer right now. Please retry in a moment."
 
     await record_module_chat_message(
         student_id, course_id, module_id, "user", message,

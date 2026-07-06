@@ -17,7 +17,12 @@ python-jose==3.5.0
 
 # Data validation and settings
 pydantic==2.7.4
-pydantic-settings==2.3.4
+# Bumped from 2.3.4: the `mcp` client SDK (used to reach the web-search MCP
+# server) requires pydantic-settings>=2.5.2. Compatible with pydantic 2.7.4.
+pydantic-settings>=2.5.2,<3
+
+# MCP client — reaches the standalone edumind_mcp_search server for web-search RAG.
+mcp>=1.2.0
 
 # Database
 asyncpg==0.29.0

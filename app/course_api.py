@@ -329,6 +329,9 @@ class CreateCourseRequest(BaseModel):
     do_not_include: list[str] = Field(default_factory=list)   # absolute exclusions
     name: str = "Student"
     profile: dict[str, Any] | None = None
+    # Web-search toggle set on the course-setup screen. When True the agent may
+    # call the MCP web-search tools for this course; when False they are never offered.
+    web_search_enabled: bool = False
 
 
 class ChatRequest(BaseModel):
@@ -458,6 +461,7 @@ async def create_course_endpoint(
             prior_knowledge=payload["prior_knowledge"],
             name=req.name,
             personalization_profile=payload["profile"],
+            web_search_enabled=req.web_search_enabled,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -488,6 +492,7 @@ async def create_course_intent(
         "prior_knowledge": payload["prior_knowledge"],
         "name": req.name,
         "profile": payload["profile"],
+        "web_search_enabled": req.web_search_enabled,
     }
     return {
         "job_id": job_id,
@@ -1156,6 +1161,7 @@ async def stream_create_course_job(
                     prior_knowledge=job["prior_knowledge"],
                     name=job["name"],
                     personalization_profile=_safe_creation_profile(job.get("profile")),
+                    web_search_enabled=bool(job.get("web_search_enabled")),
             ):
                 yield item
         finally:
