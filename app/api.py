@@ -167,10 +167,12 @@ app.add_middleware(
 from evaluation.api_router import router as eval_router
 from app.auth import router as auth_router
 from app.course_api import router as course_router
+from app.institution_api import router as institution_router
 
 app.include_router(eval_router)
 app.include_router(auth_router)
 app.include_router(course_router)
+app.include_router(institution_router)
 
 
 # ── Request / Response models ─────────────────────────────────────────────────

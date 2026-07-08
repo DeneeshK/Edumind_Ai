@@ -433,6 +433,193 @@ CREATE INDEX IF NOT EXISTS idx_course_schedules_student
     ON course_schedules(student_id);
 CREATE INDEX IF NOT EXISTS idx_course_schedules_course
     ON course_schedules(course_id);
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- Institution module ("My Institution") — classrooms, assignments, tests,
+-- analytics events, AI artifacts. Purely additive; existing tables untouched.
+-- ══════════════════════════════════════════════════════════════════════════
+
+-- 26. institutions — optional umbrella for classrooms
+CREATE TABLE IF NOT EXISTS institutions (
+    id                TEXT PRIMARY KEY,
+    owner_student_id  TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+    name              TEXT NOT NULL,
+    kind              TEXT NOT NULL DEFAULT 'personal', -- personal|school|coaching|tuition
+    logo_url          TEXT NOT NULL DEFAULT '',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 27. classrooms — a teacher-owned group of students
+CREATE TABLE IF NOT EXISTS classrooms (
+    id                TEXT PRIMARY KEY,
+    institution_id    TEXT REFERENCES institutions(id) ON DELETE SET NULL,
+    owner_student_id  TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+    name              TEXT NOT NULL,
+    subject           TEXT NOT NULL DEFAULT '',
+    grade_level       TEXT NOT NULL DEFAULT '',
+    description       TEXT NOT NULL DEFAULT '',
+    join_code         TEXT NOT NULL UNIQUE,
+    join_policy       TEXT NOT NULL DEFAULT 'approval', -- open|approval|invite_only
+    status            TEXT NOT NULL DEFAULT 'active',   -- active|archived
+    settings_json     JSONB NOT NULL DEFAULT '{}',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_classrooms_owner ON classrooms(owner_student_id);
+
+-- 28. classroom_members — students (and co-teachers) inside a classroom
+CREATE TABLE IF NOT EXISTS classroom_members (
+    id                SERIAL PRIMARY KEY,
+    classroom_id      TEXT NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
+    student_id        TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+    role              TEXT NOT NULL DEFAULT 'student',  -- student|co_teacher
+    status            TEXT NOT NULL DEFAULT 'active',   -- pending|active|removed|left
+    display_name      TEXT NOT NULL DEFAULT '',
+    joined_at         TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (classroom_id, student_id)
+);
+CREATE INDEX IF NOT EXISTS idx_classroom_members_student ON classroom_members(student_id);
+
+-- 29. classroom_courses — a teacher course template published into a classroom
+CREATE TABLE IF NOT EXISTS classroom_courses (
+    id                  TEXT PRIMARY KEY,
+    classroom_id        TEXT NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
+    template_course_id  TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    title               TEXT NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'draft', -- draft|approved|assigned|archived
+    assigned_at         TIMESTAMPTZ,
+    due_date            DATE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_classroom_courses_classroom ON classroom_courses(classroom_id);
+
+-- 30. course_assignments — per-student clone linkage (courses table untouched)
+CREATE TABLE IF NOT EXISTS course_assignments (
+    id                  SERIAL PRIMARY KEY,
+    classroom_course_id TEXT NOT NULL REFERENCES classroom_courses(id) ON DELETE CASCADE,
+    classroom_id        TEXT NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
+    student_id          TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+    course_id           TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    status              TEXT NOT NULL DEFAULT 'assigned', -- assigned|in_progress|completed
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (classroom_course_id, student_id)
+);
+CREATE INDEX IF NOT EXISTS idx_course_assignments_classroom ON course_assignments(classroom_id);
+CREATE INDEX IF NOT EXISTS idx_course_assignments_student   ON course_assignments(student_id);
+
+-- 31. classroom_tests — AI-generated tests with review lifecycle
+CREATE TABLE IF NOT EXISTS classroom_tests (
+    id                  TEXT PRIMARY KEY,
+    classroom_id        TEXT NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
+    classroom_course_id TEXT REFERENCES classroom_courses(id) ON DELETE SET NULL,
+    created_by          TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+    title               TEXT NOT NULL,
+    topic               TEXT NOT NULL,
+    instructions        TEXT NOT NULL DEFAULT '',
+    config_json         JSONB NOT NULL DEFAULT '{}',
+    status              TEXT NOT NULL DEFAULT 'draft', -- draft|approved|scheduled|live|closed
+    scheduled_start     TIMESTAMPTZ,
+    scheduled_end       TIMESTAMPTZ,
+    duration_minutes    INT NOT NULL DEFAULT 30,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_classroom_tests_classroom ON classroom_tests(classroom_id);
+
+-- 32. test_questions
+CREATE TABLE IF NOT EXISTS test_questions (
+    id              TEXT PRIMARY KEY,
+    test_id         TEXT NOT NULL REFERENCES classroom_tests(id) ON DELETE CASCADE,
+    order_index     INT NOT NULL DEFAULT 0,
+    question_type   TEXT NOT NULL DEFAULT 'mcq',  -- mcq|short_answer|conceptual
+    question_text   TEXT NOT NULL,
+    options_json    JSONB NOT NULL DEFAULT '[]',
+    correct_answer  TEXT NOT NULL DEFAULT '',
+    explanation     TEXT NOT NULL DEFAULT '',
+    concepts_tested JSONB NOT NULL DEFAULT '[]',
+    difficulty      TEXT NOT NULL DEFAULT 'medium',
+    points          FLOAT NOT NULL DEFAULT 1.0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_test_questions_test ON test_questions(test_id);
+
+-- 33. test_attempts — one per student per test
+CREATE TABLE IF NOT EXISTS test_attempts (
+    id                  TEXT PRIMARY KEY,
+    test_id             TEXT NOT NULL REFERENCES classroom_tests(id) ON DELETE CASCADE,
+    student_id          TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+    status              TEXT NOT NULL DEFAULT 'in_progress', -- in_progress|submitted|graded
+    answers_json        JSONB NOT NULL DEFAULT '[]',
+    score               FLOAT,
+    max_score           FLOAT,
+    per_question_json   JSONB NOT NULL DEFAULT '[]',
+    concept_scores_json JSONB NOT NULL DEFAULT '{}',
+    started_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    submitted_at        TIMESTAMPTZ,
+    graded_at           TIMESTAMPTZ,
+    UNIQUE (test_id, student_id)
+);
+CREATE INDEX IF NOT EXISTS idx_test_attempts_student ON test_attempts(student_id);
+
+-- 34. learning_events — append-only engagement log for classroom analytics
+CREATE TABLE IF NOT EXISTS learning_events (
+    id              BIGSERIAL PRIMARY KEY,
+    student_id      TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+    classroom_id    TEXT,
+    course_id       TEXT,
+    module_id       TEXT,
+    event_type      TEXT NOT NULL,
+    payload_json    JSONB NOT NULL DEFAULT '{}',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_learning_events_classroom
+    ON learning_events(classroom_id, created_at) WHERE classroom_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_learning_events_student
+    ON learning_events(student_id, created_at);
+
+-- 35. classroom_ai_artifacts — cached agent outputs (insights, clusters, plans)
+CREATE TABLE IF NOT EXISTS classroom_ai_artifacts (
+    id              TEXT PRIMARY KEY,
+    classroom_id    TEXT NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
+    artifact_type   TEXT NOT NULL,   -- insights|clusters|revision_plan|recommendations
+    scope_key       TEXT NOT NULL DEFAULT '',
+    content_json    JSONB NOT NULL DEFAULT '{}',
+    generated_by    TEXT NOT NULL DEFAULT '',
+    stale           BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_classroom_ai_artifacts
+    ON classroom_ai_artifacts(classroom_id, artifact_type, created_at);
+
+-- 36. teacher_assistant_messages — teacher-facing assistant chat history
+CREATE TABLE IF NOT EXISTS teacher_assistant_messages (
+    id              TEXT PRIMARY KEY,
+    classroom_id    TEXT NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
+    student_id      TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+    role            TEXT NOT NULL,   -- user|assistant
+    message         TEXT NOT NULL,
+    tool_trace_json JSONB NOT NULL DEFAULT '[]',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_teacher_assistant_classroom
+    ON teacher_assistant_messages(classroom_id, created_at);
+
+-- 37. classroom_posts — announcements, tasks, published plans (cluster-targetable)
+CREATE TABLE IF NOT EXISTS classroom_posts (
+    id              TEXT PRIMARY KEY,
+    classroom_id    TEXT NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
+    author_id       TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+    post_type       TEXT NOT NULL DEFAULT 'announcement', -- announcement|task|revision_plan
+    title           TEXT NOT NULL DEFAULT '',
+    body_markdown   TEXT NOT NULL DEFAULT '',
+    audience_json   JSONB NOT NULL DEFAULT '{}',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_classroom_posts_classroom
+    ON classroom_posts(classroom_id, created_at);
 """
 
 
