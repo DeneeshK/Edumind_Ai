@@ -49,7 +49,6 @@ class ClassroomCreateRequest(BaseModel):
     subject: str = ""
     grade_level: str = ""
     description: str = ""
-    join_policy: str = "approval"
 
 
 class ClassroomUpdateRequest(BaseModel):
@@ -57,11 +56,14 @@ class ClassroomUpdateRequest(BaseModel):
     subject: str | None = None
     grade_level: str | None = None
     description: str | None = None
-    join_policy: str | None = None
 
 
-class JoinRequest(BaseModel):
-    join_code: str
+class InviteRequest(BaseModel):
+    emails: str | list[str]
+
+
+class RevokeInviteRequest(BaseModel):
+    email: str
 
 
 class RegisterCourseRequest(BaseModel):
@@ -143,10 +145,12 @@ class EventsRequest(BaseModel):
 
 @router.get("/me/home")
 async def institution_home(current_user: dict[str, Any] = Depends(require_current_user)):
-    """Everything the institution home page needs: teaching + joined classrooms."""
+    """Everything the institution home needs: teaching, joined, and pending
+    email invitations for the signed-in user."""
     sid = _student_id(current_user)
     data = await repo.list_classrooms_for_student(sid)
-    return {**data, "student_id": sid}
+    invitations = await repo.list_invitations_for_email(current_user.get("email") or "")
+    return {**data, "invitations": invitations, "student_id": sid}
 
 
 # ── Classrooms ────────────────────────────────────────────────────────────────
@@ -164,7 +168,6 @@ async def create_classroom(
         subject=req.subject,
         grade_level=req.grade_level,
         description=req.description,
-        join_policy=req.join_policy,
     )
 
 
@@ -177,8 +180,7 @@ async def classroom_detail(
     sid = _student_id(current_user)
     classroom = await service.require_member(classroom_id, sid)
     role = service.viewer_role(classroom, sid)
-    if role != "teacher":
-        classroom.pop("join_code", None)  # students share nothing sensitive
+    classroom.pop("join_code", None)  # codes are not used; joining is by email invite
     return {**classroom, "viewer_role": role}
 
 
@@ -204,25 +206,56 @@ async def archive_classroom(
     return await repo.update_classroom(classroom_id, {"status": new_status})
 
 
-@router.post("/classrooms/{classroom_id}/regenerate-code")
-async def regenerate_code(
+# ── Invitations (email allowlist) ─────────────────────────────────────────────
+
+@router.get("/classrooms/{classroom_id}/invitations")
+async def list_invitations(
     classroom_id: str,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
-    """Invalidate the old join code and mint a new one."""
+    """Teacher: the classroom's email allowlist and who has joined."""
     await service.require_teacher(classroom_id, _student_id(current_user))
-    return {"join_code": await repo.regenerate_join_code(classroom_id)}
+    return {"invitations": await repo.list_invitations(classroom_id)}
 
 
-@router.post("/classrooms/join")
-async def join_classroom(
-    req: JoinRequest,
+@router.post("/classrooms/{classroom_id}/invitations")
+async def invite_students(
+    classroom_id: str,
+    req: InviteRequest,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
-    """Join a classroom by code (WhatsApp-group style)."""
-    result = await service.join_classroom(
-        join_code=req.join_code,
+    """Add one or more emails to the classroom allowlist."""
+    await service.require_teacher(classroom_id, _student_id(current_user))
+    return await service.invite_students(
+        classroom_id=classroom_id,
+        raw_emails=req.emails,
+        invited_by=_student_id(current_user),
+        teacher_email=current_user.get("email") or "",
+    )
+
+
+@router.post("/classrooms/{classroom_id}/invitations/revoke")
+async def revoke_invitation(
+    classroom_id: str,
+    req: RevokeInviteRequest,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    """Remove an email from the allowlist (joined students are unaffected)."""
+    await service.require_teacher(classroom_id, _student_id(current_user))
+    await service.revoke_invitation(classroom_id, req.email)
+    return {"success": True}
+
+
+@router.post("/classrooms/{classroom_id}/accept")
+async def accept_invitation(
+    classroom_id: str,
+    current_user: dict[str, Any] = Depends(require_current_user),
+):
+    """Student one-tap accepts an email invitation to this classroom."""
+    result = await service.accept_invitation(
+        classroom_id=classroom_id,
         student_id=_student_id(current_user),
+        email=current_user.get("email") or "",
         display_name=_display_name(current_user),
     )
     classroom = dict(result["classroom"])
@@ -237,27 +270,16 @@ async def list_members(
     classroom_id: str,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
-    """Members list — teachers see emails + pending requests, students see names."""
+    """Members list — teachers see emails, students see names of active members."""
     sid = _student_id(current_user)
     classroom = await service.require_member(classroom_id, sid)
-    members = await repo.list_members(classroom_id)
+    members = await repo.list_members(classroom_id, statuses=["active"])
     if service.viewer_role(classroom, sid) != "teacher":
         members = [
             {"student_id": m["student_id"], "name": m["name"], "status": m["status"]}
-            for m in members if m["status"] == "active"
+            for m in members
         ]
     return {"members": members}
-
-
-@router.post("/classrooms/{classroom_id}/members/{member_student_id}/approve")
-async def approve_member(
-    classroom_id: str,
-    member_student_id: str,
-    current_user: dict[str, Any] = Depends(require_current_user),
-):
-    """Approve a pending join request; back-assigns existing courses."""
-    await service.require_teacher(classroom_id, _student_id(current_user))
-    return await service.approve_member(classroom_id, member_student_id)
 
 
 @router.post("/classrooms/{classroom_id}/members/{member_student_id}/remove")

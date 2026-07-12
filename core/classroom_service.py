@@ -71,13 +71,11 @@ async def create_classroom(
     subject: str = "",
     grade_level: str = "",
     description: str = "",
-    join_policy: str = "approval",
 ) -> dict[str, Any]:
-    """Create a classroom; the creator becomes its teacher."""
+    """Create a classroom; the creator becomes its teacher. Joining is by
+    email invitation only, so no join policy is needed."""
     if not name.strip():
         raise HTTPException(status_code=422, detail="Classroom name is required")
-    if join_policy not in ("open", "approval", "invite_only"):
-        join_policy = "approval"
     await ensure_student(owner_student_id, owner_name)
     return await repo.create_classroom(
         owner_student_id=owner_student_id,
@@ -85,54 +83,80 @@ async def create_classroom(
         subject=subject.strip(),
         grade_level=grade_level.strip(),
         description=description.strip(),
-        join_policy=join_policy,
+        join_policy="invite_only",
     )
 
 
-async def join_classroom(join_code: str, student_id: str, display_name: str) -> dict[str, Any]:
-    """
-    Join a classroom by code. Returns {classroom, membership_status}.
+# ── Email allowlist: invite → accept ──────────────────────────────────────────
 
-    open        → immediately active
-    approval    → pending until the teacher approves
-    invite_only → rejected (teacher must add by approval of a pending request)
+# Pragmatic email check — real validation happens when a real account matches.
+_EMAIL_RE = __import__("re").compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _parse_email_list(raw: str | list[str]) -> list[str]:
+    """Split teacher input on commas/semicolons/whitespace and normalise."""
+    if isinstance(raw, list):
+        parts = raw
+    else:
+        parts = __import__("re").split(r"[,;\s]+", str(raw or ""))
+    seen: set[str] = set()
+    emails: list[str] = []
+    for part in parts:
+        email = repo.normalize_email(part)
+        if email and _EMAIL_RE.match(email) and email not in seen:
+            seen.add(email)
+            emails.append(email)
+    return emails
+
+
+async def invite_students(
+    classroom_id: str,
+    raw_emails: str | list[str],
+    invited_by: str,
+    teacher_email: str = "",
+) -> dict[str, Any]:
+    """Add emails to the classroom allowlist. Returns the full invitation list."""
+    emails = _parse_email_list(raw_emails)
+    teacher_email = repo.normalize_email(teacher_email)
+    emails = [e for e in emails if e != teacher_email]  # never invite yourself
+    if not emails:
+        raise HTTPException(status_code=422, detail="Enter at least one valid email address")
+    invitations = await repo.add_invitations(classroom_id, emails, invited_by)
+    return {"invitations": invitations, "added": len(emails)}
+
+
+async def revoke_invitation(classroom_id: str, email: str) -> None:
+    """Remove an email from the allowlist (already-joined students stay)."""
+    await repo.revoke_invitation(classroom_id, email)
+
+
+async def accept_invitation(
+    classroom_id: str, student_id: str, email: str, display_name: str
+) -> dict[str, Any]:
     """
-    classroom = await repo.get_classroom_by_join_code(join_code)
-    if not classroom:
-        raise HTTPException(status_code=404, detail="No classroom found for this code")
-    if classroom["owner_student_id"] == student_id:
-        raise HTTPException(status_code=400, detail="You are the teacher of this classroom")
-    if classroom["join_policy"] == "invite_only":
+    Student one-tap accepts an invitation. Verifies their account email is on
+    the allowlist, then creates an active membership and back-assigns courses.
+    """
+    classroom = await require_classroom(classroom_id)
+    invitation = await repo.get_invitation(classroom_id, email)
+    if not invitation or invitation["status"] == "revoked":
         raise HTTPException(
-            status_code=403, detail="This classroom is invite-only. Ask your teacher to add you."
+            status_code=403,
+            detail="You don't have an invitation to this classroom. Ask your teacher to add your email.",
         )
 
-    existing = await repo.get_membership(classroom["id"], student_id)
+    existing = await repo.get_membership(classroom_id, student_id)
     if existing and existing["status"] == "active":
         return {"classroom": classroom, "membership_status": "active", "already_member": True}
     if existing and existing["status"] == "removed":
         raise HTTPException(status_code=403, detail="You were removed from this classroom")
 
-    status = "active" if classroom["join_policy"] == "open" else "pending"
     membership = await repo.upsert_membership(
-        classroom["id"], student_id, status=status, display_name=display_name
+        classroom_id, student_id, status="active", display_name=display_name
     )
-
-    # New active members receive all already-assigned courses automatically.
-    if status == "active":
-        await assign_all_courses_to_student(classroom["id"], student_id)
-
-    return {"classroom": classroom, "membership_status": membership["status"]}
-
-
-async def approve_member(classroom_id: str, student_id: str) -> dict[str, Any]:
-    """Teacher approves a pending request; back-assigns existing courses."""
-    membership = await repo.get_membership(classroom_id, student_id)
-    if not membership or membership["status"] != "pending":
-        raise HTTPException(status_code=404, detail="No pending request for this student")
-    result = await repo.upsert_membership(classroom_id, student_id, status="active")
+    await repo.mark_invitation_accepted(classroom_id, email)
     await assign_all_courses_to_student(classroom_id, student_id)
-    return result
+    return {"classroom": classroom, "membership_status": membership["status"]}
 
 
 async def remove_member(classroom_id: str, student_id: str) -> None:

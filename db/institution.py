@@ -256,6 +256,121 @@ async def active_member_ids(classroom_id: str) -> list[str]:
     return [r["student_id"] for r in rows]
 
 
+# ── Invitations (email allowlist) ─────────────────────────────────────────────
+
+def normalize_email(email: str) -> str:
+    """Lowercase and trim an email for consistent allowlist matching."""
+    return str(email or "").strip().lower()
+
+
+async def add_invitations(
+    classroom_id: str, emails: list[str], invited_by: str
+) -> list[dict[str, Any]]:
+    """Insert (or re-activate) email invitations. Returns the current list."""
+    async with get_conn() as conn:
+        for email in emails:
+            await conn.execute(
+                """
+                INSERT INTO classroom_invitations (id, classroom_id, email, invited_by, status)
+                VALUES ($1,$2,$3,$4,'invited')
+                ON CONFLICT (classroom_id, email) DO UPDATE
+                  SET status='invited', invited_by=$4, accepted_at=NULL
+                  WHERE classroom_invitations.status = 'revoked'
+                """,
+                new_id("inv"), classroom_id, email, invited_by,
+            )
+    return await list_invitations(classroom_id)
+
+
+async def list_invitations(classroom_id: str) -> list[dict[str, Any]]:
+    """List non-revoked invitations, annotated with whether the email has an account."""
+    async with get_conn() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT ci.email, ci.status, ci.created_at, ci.accepted_at,
+                   u.name AS account_name,
+                   (u.id IS NOT NULL) AS has_account
+              FROM classroom_invitations ci
+              LEFT JOIN users u ON lower(u.email) = ci.email
+             WHERE ci.classroom_id=$1 AND ci.status <> 'revoked'
+             ORDER BY ci.status, ci.created_at DESC
+            """,
+            classroom_id,
+        )
+    return [dict(r) for r in rows]
+
+
+async def get_invitation(classroom_id: str, email: str) -> dict[str, Any] | None:
+    """Return one invitation row by classroom + email, if present."""
+    async with get_conn() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM classroom_invitations WHERE classroom_id=$1 AND email=$2",
+            classroom_id, normalize_email(email),
+        )
+    return dict(row) if row else None
+
+
+async def revoke_invitation(classroom_id: str, email: str) -> None:
+    """Revoke an email's invitation (does not remove an already-joined student)."""
+    async with get_conn() as conn:
+        await conn.execute(
+            """
+            UPDATE classroom_invitations SET status='revoked'
+             WHERE classroom_id=$1 AND email=$2
+            """,
+            classroom_id, normalize_email(email),
+        )
+
+
+async def mark_invitation_accepted(classroom_id: str, email: str) -> None:
+    """Flag an invitation accepted after the student joins."""
+    async with get_conn() as conn:
+        await conn.execute(
+            """
+            UPDATE classroom_invitations
+               SET status='accepted', accepted_at=NOW()
+             WHERE classroom_id=$1 AND email=$2
+            """,
+            classroom_id, normalize_email(email),
+        )
+
+
+async def list_invitations_for_email(email: str) -> list[dict[str, Any]]:
+    """
+    Classrooms an email is invited to but hasn't joined yet — powers the
+    student's "You've been invited" section. Excludes classrooms where the
+    student is already an active member.
+    """
+    normalized = normalize_email(email)
+    if not normalized:
+        return []
+    async with get_conn() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT ci.classroom_id, ci.created_at,
+                   c.name, c.subject, c.grade_level, c.description,
+                   COALESCE(u.name, 'A teacher') AS teacher_name
+              FROM classroom_invitations ci
+              JOIN classrooms c ON c.id = ci.classroom_id
+              LEFT JOIN users u ON u.student_id = c.owner_student_id
+             WHERE ci.email = $1
+               AND ci.status = 'invited'
+               AND c.status = 'active'
+               AND NOT EXISTS (
+                   SELECT 1 FROM classroom_members m
+                    WHERE m.classroom_id = ci.classroom_id
+                      AND m.student_id = (
+                          SELECT student_id FROM users WHERE lower(email)=$1 LIMIT 1
+                      )
+                      AND m.status = 'active'
+               )
+             ORDER BY ci.created_at DESC
+            """,
+            normalized,
+        )
+    return [dict(r) for r in rows]
+
+
 # ── Classroom courses & assignments ──────────────────────────────────────────
 
 async def create_classroom_course(

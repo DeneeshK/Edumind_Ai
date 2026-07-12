@@ -620,6 +620,23 @@ CREATE TABLE IF NOT EXISTS classroom_posts (
 );
 CREATE INDEX IF NOT EXISTS idx_classroom_posts_classroom
     ON classroom_posts(classroom_id, created_at);
+
+-- 38. classroom_invitations — teacher-controlled email allowlist.
+-- A student whose account email matches an 'invited' row can one-tap join.
+CREATE TABLE IF NOT EXISTS classroom_invitations (
+    id            TEXT PRIMARY KEY,
+    classroom_id  TEXT NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
+    email         TEXT NOT NULL,                    -- stored lowercased
+    invited_by    TEXT REFERENCES students(student_id) ON DELETE SET NULL,
+    status        TEXT NOT NULL DEFAULT 'invited',  -- invited | accepted | revoked
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    accepted_at   TIMESTAMPTZ,
+    UNIQUE (classroom_id, email)
+);
+CREATE INDEX IF NOT EXISTS idx_classroom_invitations_email
+    ON classroom_invitations(email) WHERE status = 'invited';
+CREATE INDEX IF NOT EXISTS idx_classroom_invitations_classroom
+    ON classroom_invitations(classroom_id);
 """
 
 
