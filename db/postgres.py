@@ -620,6 +620,10 @@ CREATE TABLE IF NOT EXISTS classroom_posts (
 );
 CREATE INDEX IF NOT EXISTS idx_classroom_posts_classroom
     ON classroom_posts(classroom_id, created_at);
+-- Post-type-specific metadata (e.g. Google Meet link_url + event_time for a
+-- live class, or an attachment url for a shared note).
+ALTER TABLE classroom_posts
+    ADD COLUMN IF NOT EXISTS meta_json JSONB NOT NULL DEFAULT '{}';
 
 -- 38. classroom_invitations — teacher-controlled email allowlist.
 -- A student whose account email matches an 'invited' row can one-tap join.
@@ -637,6 +641,12 @@ CREATE INDEX IF NOT EXISTS idx_classroom_invitations_email
     ON classroom_invitations(email) WHERE status = 'invited';
 CREATE INDEX IF NOT EXISTS idx_classroom_invitations_classroom
     ON classroom_invitations(classroom_id);
+-- Optional roster details the teacher enters when inviting (email stays the
+-- login constraint; name/phone are just for the teacher's roster).
+ALTER TABLE classroom_invitations
+    ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
+ALTER TABLE classroom_invitations
+    ADD COLUMN IF NOT EXISTS phone TEXT NOT NULL DEFAULT '';
 """
 
 

@@ -111,18 +111,34 @@ def _parse_email_list(raw: str | list[str]) -> list[str]:
 
 async def invite_students(
     classroom_id: str,
-    raw_emails: str | list[str],
+    students: list[dict[str, Any]],
     invited_by: str,
     teacher_email: str = "",
 ) -> dict[str, Any]:
-    """Add emails to the classroom allowlist. Returns the full invitation list."""
-    emails = _parse_email_list(raw_emails)
+    """
+    Add students to the classroom allowlist from {email, name, phone} entries.
+    Email is the login constraint; name/phone are optional roster details.
+    """
     teacher_email = repo.normalize_email(teacher_email)
-    emails = [e for e in emails if e != teacher_email]  # never invite yourself
-    if not emails:
-        raise HTTPException(status_code=422, detail="Enter at least one valid email address")
-    invitations = await repo.add_invitations(classroom_id, emails, invited_by)
-    return {"invitations": invitations, "added": len(emails)}
+    cleaned: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in students or []:
+        email = repo.normalize_email(entry.get("email", ""))
+        if not email or not _EMAIL_RE.match(email) or email == teacher_email or email in seen:
+            continue
+        seen.add(email)
+        cleaned.append({
+            "email": email,
+            "name": str(entry.get("name") or "").strip(),
+            "phone": str(entry.get("phone") or "").strip(),
+        })
+    if not cleaned:
+        raise HTTPException(
+            status_code=422,
+            detail="Enter at least one student with a valid email address",
+        )
+    invitations = await repo.add_invitations(classroom_id, cleaned, invited_by)
+    return {"invitations": invitations, "added": len(cleaned)}
 
 
 async def revoke_invitation(classroom_id: str, email: str) -> None:
@@ -151,8 +167,10 @@ async def accept_invitation(
     if existing and existing["status"] == "removed":
         raise HTTPException(status_code=403, detail="You were removed from this classroom")
 
+    # Prefer the name the teacher entered on the invitation for the roster.
+    roster_name = str(invitation.get("name") or "").strip() or display_name
     membership = await repo.upsert_membership(
-        classroom_id, student_id, status="active", display_name=display_name
+        classroom_id, student_id, status="active", display_name=roster_name
     )
     await repo.mark_invitation_accepted(classroom_id, email)
     await assign_all_courses_to_student(classroom_id, student_id)

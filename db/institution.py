@@ -264,30 +264,41 @@ def normalize_email(email: str) -> str:
 
 
 async def add_invitations(
-    classroom_id: str, emails: list[str], invited_by: str
+    classroom_id: str, students: list[dict[str, Any]], invited_by: str
 ) -> list[dict[str, Any]]:
-    """Insert (or re-activate) email invitations. Returns the current list."""
+    """
+    Insert (or update) email invitations from {email, name, phone} entries.
+    Re-invites a previously revoked email, and refreshes name/phone when given.
+    """
     async with get_conn() as conn:
-        for email in emails:
+        for student in students:
             await conn.execute(
                 """
-                INSERT INTO classroom_invitations (id, classroom_id, email, invited_by, status)
-                VALUES ($1,$2,$3,$4,'invited')
+                INSERT INTO classroom_invitations
+                  (id, classroom_id, email, name, phone, invited_by, status)
+                VALUES ($1,$2,$3,$4,$5,$6,'invited')
                 ON CONFLICT (classroom_id, email) DO UPDATE
-                  SET status='invited', invited_by=$4, accepted_at=NULL
-                  WHERE classroom_invitations.status = 'revoked'
+                  SET name  = CASE WHEN $4 <> '' THEN $4 ELSE classroom_invitations.name END,
+                      phone = CASE WHEN $5 <> '' THEN $5 ELSE classroom_invitations.phone END,
+                      invited_by = $6,
+                      status = CASE WHEN classroom_invitations.status = 'revoked'
+                                    THEN 'invited' ELSE classroom_invitations.status END,
+                      accepted_at = CASE WHEN classroom_invitations.status = 'revoked'
+                                    THEN NULL ELSE classroom_invitations.accepted_at END
                 """,
-                new_id("inv"), classroom_id, email, invited_by,
+                new_id("inv"), classroom_id,
+                student["email"], student.get("name", ""), student.get("phone", ""),
+                invited_by,
             )
     return await list_invitations(classroom_id)
 
 
 async def list_invitations(classroom_id: str) -> list[dict[str, Any]]:
-    """List non-revoked invitations, annotated with whether the email has an account."""
+    """List non-revoked invitations with roster details and account status."""
     async with get_conn() as conn:
         rows = await conn.fetch(
             """
-            SELECT ci.email, ci.status, ci.created_at, ci.accepted_at,
+            SELECT ci.email, ci.name, ci.phone, ci.status, ci.created_at, ci.accepted_at,
                    u.name AS account_name,
                    (u.id IS NOT NULL) AS has_account
               FROM classroom_invitations ci
@@ -961,18 +972,21 @@ async def create_post(
     title: str,
     body_markdown: str,
     audience: dict[str, Any] | None = None,
+    meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create a classroom stream post (announcement / task / revision plan)."""
+    """Create a classroom stream post (announcement / note / live class / task)."""
     post_id = new_id("post")
     async with get_conn() as conn:
         await conn.execute(
             """
             INSERT INTO classroom_posts
-              (id, classroom_id, author_id, post_type, title, body_markdown, audience_json)
-            VALUES ($1,$2,$3,$4,$5,$6,$7)
+              (id, classroom_id, author_id, post_type, title, body_markdown,
+               audience_json, meta_json)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
             """,
             post_id, classroom_id, author_id, post_type, title, body_markdown,
             json.dumps(audience or {"all": True}),
+            json.dumps(meta or {}),
         )
     return {"id": post_id}
 
@@ -990,4 +1004,4 @@ async def list_posts(classroom_id: str, limit: int = 50) -> list[dict[str, Any]]
             """,
             classroom_id, limit,
         )
-    return [_row_dict(r, {"audience_json": {}}) for r in rows]
+    return [_row_dict(r, {"audience_json": {}, "meta_json": {}}) for r in rows]

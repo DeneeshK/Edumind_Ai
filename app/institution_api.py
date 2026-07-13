@@ -58,8 +58,14 @@ class ClassroomUpdateRequest(BaseModel):
     description: str | None = None
 
 
+class InviteStudentPayload(BaseModel):
+    email: str
+    name: str = ""
+    phone: str = ""
+
+
 class InviteRequest(BaseModel):
-    emails: str | list[str]
+    students: list[InviteStudentPayload]
 
 
 class RevokeInviteRequest(BaseModel):
@@ -118,9 +124,11 @@ class AssistantChatRequest(BaseModel):
 
 
 class PostCreateRequest(BaseModel):
-    post_type: str = "announcement"
+    post_type: str = "announcement"      # announcement | note | meet | task
     title: str = ""
-    body_markdown: str
+    body_markdown: str = ""
+    link_url: str = ""                   # Google Meet / resource link (meet, note)
+    event_time: str = ""                 # ISO datetime for a scheduled live class
     student_ids: list[str] | None = None  # None/empty → everyone
 
 
@@ -224,11 +232,11 @@ async def invite_students(
     req: InviteRequest,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
-    """Add one or more emails to the classroom allowlist."""
+    """Add one or more students (email + optional name/phone) to the allowlist."""
     await service.require_teacher(classroom_id, _student_id(current_user))
     return await service.invite_students(
         classroom_id=classroom_id,
-        raw_emails=req.emails,
+        students=[s.model_dump() for s in req.students],
         invited_by=_student_id(current_user),
         teacher_email=current_user.get("email") or "",
     )
@@ -789,15 +797,30 @@ async def create_post(
     req: PostCreateRequest,
     current_user: dict[str, Any] = Depends(require_current_user),
 ):
-    """Publish an announcement / task (optionally targeted to specific students)."""
+    """Publish an announcement, a shared note, or a live-class (Meet) link,
+    optionally targeted to specific students."""
     sid = _student_id(current_user)
     await service.require_teacher(classroom_id, sid)
-    if not req.body_markdown.strip():
-        raise HTTPException(status_code=422, detail="Post body is required")
+
+    post_type = req.post_type if req.post_type in (
+        "announcement", "note", "meet", "task", "revision_plan"
+    ) else "announcement"
+
+    link_url = req.link_url.strip()
+    if post_type == "meet" and not link_url:
+        raise HTTPException(status_code=422, detail="A Google Meet link is required")
+    if post_type != "meet" and not req.body_markdown.strip() and not req.title.strip():
+        raise HTTPException(status_code=422, detail="Add a title or some content")
+
     audience = (
         {"student_ids": req.student_ids} if req.student_ids else {"all": True}
     )
-    post_type = req.post_type if req.post_type in ("announcement", "task", "revision_plan") else "announcement"
+    meta = {}
+    if link_url:
+        meta["link_url"] = link_url
+    if req.event_time.strip():
+        meta["event_time"] = req.event_time.strip()
+
     return await repo.create_post(
         classroom_id=classroom_id,
         author_id=sid,
@@ -805,6 +828,7 @@ async def create_post(
         title=req.title.strip(),
         body_markdown=req.body_markdown,
         audience=audience,
+        meta=meta,
     )
 
 
