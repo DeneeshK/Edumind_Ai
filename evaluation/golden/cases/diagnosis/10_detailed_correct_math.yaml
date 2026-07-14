@@ -1,0 +1,20 @@
+name: detailed_correct_math
+description: A correct, well-explained math answer should read as clear mastery.
+module:
+  title: Derivatives
+  concept: Derivatives
+  concepts_taught: [Power rule, Derivative of a polynomial]
+  question_scope: [Power rule]
+lesson_excerpt: |
+  The power rule states that the derivative of x^n is n*x^(n-1). Derivatives of a sum
+  are taken term by term, and the derivative of a constant is 0.
+question:
+  question_text: What is the derivative of f(x) = 3x^2 + 5x + 7?
+  concepts_tested: [Power rule]
+answer: >-
+  Using the power rule term by term: d/dx(3x^2) = 6x, d/dx(5x) = 5, and the derivative
+  of the constant 7 is 0. So f'(x) = 6x + 5.
+confidence: 5
+expect:
+  mastery_signal: [clear]
+  weak_concepts_must_not: [Power rule]

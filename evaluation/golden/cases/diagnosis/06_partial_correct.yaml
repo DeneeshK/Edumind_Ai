@@ -1,0 +1,18 @@
+name: partial_correct
+description: A partially correct answer that misses a key detail should not read as fully clear.
+module:
+  title: Lists vs tuples
+  concept: Lists and tuples
+  concepts_taught: [Lists, Tuples, Mutability]
+  question_scope: [Lists, Tuples, Mutability]
+lesson_excerpt: |
+  A list is an ordered, mutable collection — you can add, remove, and change items.
+  A tuple is an ordered but immutable collection — once created it cannot be changed.
+  The key difference is mutability.
+question:
+  question_text: What is the main difference between a list and a tuple?
+  concepts_tested: [Lists, Tuples, Mutability]
+answer: A list uses square brackets and a tuple uses round brackets.
+confidence: 3
+expect:
+  mastery_signal_not: [clear]

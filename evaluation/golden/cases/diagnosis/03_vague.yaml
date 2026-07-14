@@ -1,0 +1,17 @@
+name: vague
+description: A vague, hand-wavy answer should not read as clear mastery.
+module:
+  title: Functions
+  concept: Functions
+  concepts_taught: [Functions, Parameters, Return values]
+  question_scope: [Functions, Return values]
+lesson_excerpt: |
+  The `return` statement sends a value back to the caller and ends the function.
+  Parameters are the named inputs a function accepts.
+question:
+  question_text: What does the `return` statement do in a function?
+  concepts_tested: [Return values]
+answer: It does something with the value and helps the function work properly.
+confidence: 2
+expect:
+  mastery_signal_not: [clear]

@@ -1,0 +1,22 @@
+name: misconception
+description: An answer built on a common misconception should be flagged as weak/uncertain.
+module:
+  title: Mutable default arguments
+  concept: Default arguments
+  concepts_taught: [Default arguments, Mutable defaults]
+  question_scope: [Default arguments, Mutable defaults]
+lesson_excerpt: |
+  A default argument value is evaluated once when the function is defined, not on each
+  call. Using a mutable default like a list means the same list is shared across calls,
+  which is a classic bug. Use None as the default and create the list inside instead.
+question:
+  question_text: >-
+    What happens if you use an empty list as a default argument and append to it on
+    each call?
+  concepts_tested: [Mutable defaults]
+answer: >-
+  Each call gets a brand new empty list because Python re-creates the default value
+  every time the function runs, so appending never accumulates across calls.
+confidence: 4
+expect:
+  mastery_signal_not: [clear]

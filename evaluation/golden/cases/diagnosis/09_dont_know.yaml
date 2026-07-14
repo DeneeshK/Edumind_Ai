@@ -1,0 +1,18 @@
+name: dont_know
+description: An "I don't know" non-answer should read as weak mastery.
+module:
+  title: Dictionaries
+  concept: Dictionaries
+  concepts_taught: [Dictionaries, Keys and values, Lookup]
+  question_scope: [Dictionaries, Lookup]
+lesson_excerpt: |
+  A dictionary maps keys to values. You look up a value by its key with square
+  brackets, e.g. `prices["apple"]`. Keys must be unique.
+question:
+  question_text: How do you get the value stored under a key in a dictionary?
+  concepts_tested: [Lookup]
+answer: I'm not sure, I don't really remember this part.
+confidence: 1
+expect:
+  mastery_signal: [weak, uncertain]
+  weak_concepts_must_not: []

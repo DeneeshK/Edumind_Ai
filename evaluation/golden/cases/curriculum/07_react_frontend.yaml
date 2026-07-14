@@ -1,0 +1,15 @@
+name: react_frontend
+description: React for building UIs — fast pace, applied web framework.
+profile:
+  topic: React
+  goal: Build interactive user interfaces with React
+  learner_level: some basic knowledge
+  pace: fast
+  prior_knowledge: Comfortable with HTML, CSS, and basic JavaScript.
+  known_concepts: [HTML, CSS]
+  must_include: [Components, Hooks]
+  do_not_include: [Redux, Next.js]
+assertions:
+  ordering_min: 0.0
+  module_count_band: [3, 40]
+  coverage_min: 0.5

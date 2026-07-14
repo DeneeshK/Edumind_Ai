@@ -1,0 +1,24 @@
+name: thermo_first_law_deep
+description: Deep-pace physics lesson on the first law of thermodynamics.
+course:
+  id: golden-lesson-2
+  topic: Thermodynamics
+  goal: Understand thermodynamics for a university physics course
+  pace: deep
+  personalization_profile:
+    learner_level: some basic knowledge
+    roadmap_steps: [Internal energy, Heat and work]
+module:
+  id: L2
+  title: The First Law of Thermodynamics
+  concept: First Law of Thermodynamics
+  concepts_taught: [Internal energy, Heat, Work]
+  question_scope: [First Law of Thermodynamics, Internal energy]
+  must_teach: [First Law of Thermodynamics]
+  prerequisites: [Temperature, Energy]
+  description: Energy conservation applied to thermodynamic systems.
+assertions:
+  required_concepts: [Internal energy, Heat, Work]
+  length_band_words: [200, 4000]
+  has_practice: true
+  quality_min: 0.6

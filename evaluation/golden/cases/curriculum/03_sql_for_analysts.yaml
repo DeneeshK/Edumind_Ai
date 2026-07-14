@@ -1,0 +1,14 @@
+name: sql_for_analysts
+description: SQL for data analysts — applied, medium pace.
+profile:
+  topic: SQL
+  goal: Query and analyse data as a business analyst
+  learner_level: complete beginner
+  pace: medium
+  prior_knowledge: No prior database experience.
+  must_include: [Join, Aggregate]
+  do_not_include: [database administration, sharding]
+assertions:
+  ordering_min: 0.0
+  module_count_band: [4, 60]
+  coverage_min: 0.5

@@ -1,0 +1,20 @@
+name: correct_code_trace
+description: A correct code-tracing answer should read as clear mastery.
+module:
+  title: For loops
+  concept: For loops
+  concepts_taught: [For loops, range, Accumulation]
+  question_scope: [For loops, range]
+lesson_excerpt: |
+  `range(1, 4)` yields 1, 2, 3. A for loop runs its body once per item. Summing in a
+  loop means adding each item to a running total that starts at 0.
+question:
+  question_text: >-
+    What is the value of total after: total = 0; for i in range(1, 4): total += i ?
+  concepts_tested: [For loops, range, Accumulation]
+answer: >-
+  range(1, 4) gives 1, 2, 3. Starting from 0 we add 1 then 2 then 3, so total is 6.
+confidence: 4
+expect:
+  mastery_signal: [clear]
+  weak_concepts_must_not: [For loops]

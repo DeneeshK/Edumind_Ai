@@ -59,6 +59,8 @@ vectors/
 # Generated evaluation reports
 evaluation/reports/*
 !evaluation/reports/.gitkeep
+evaluation/golden/reports/*
+!evaluation/golden/reports/.gitkeep
 
 # Generated outputs and temporary files
 outputs/

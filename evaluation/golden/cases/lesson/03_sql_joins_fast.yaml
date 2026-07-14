@@ -1,0 +1,26 @@
+name: sql_joins_fast
+description: Fast-pace applied lesson on SQL joins.
+course:
+  id: golden-lesson-3
+  topic: SQL
+  goal: Query and analyse data as a business analyst
+  pace: fast
+  personalization_profile:
+    learner_level: complete beginner
+    roadmap_steps: [SELECT basics, Filtering rows]
+module:
+  id: L3
+  title: Joining Tables
+  concept: Joins
+  concepts_taught: [Inner join, Join keys]
+  question_scope: [Inner join, Join keys]
+  must_teach: [Inner join]
+  prerequisites: [SELECT, WHERE]
+  description: Combining rows from two tables on a shared key.
+assertions:
+  # "key" (substring) rather than the phrase "Join keys" — the fast lesson reliably
+  # teaches joining on a shared key but paraphrases the concept name.
+  required_concepts: [Inner join, key]
+  length_band_words: [80, 1400]
+  has_practice: true
+  quality_min: 0.6

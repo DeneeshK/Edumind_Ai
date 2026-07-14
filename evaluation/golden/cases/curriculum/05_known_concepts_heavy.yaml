@@ -1,0 +1,17 @@
+name: known_concepts_heavy
+description: ML for someone with substantial prior knowledge — stresses known_concepts compression.
+profile:
+  topic: Machine learning
+  goal: Build and evaluate supervised ML models
+  learner_level: intermediate
+  pace: medium
+  prior_knowledge: >-
+    Works as a Python developer, comfortable with NumPy and pandas, and has taken
+    university linear algebra and calculus.
+  known_concepts: [Python, NumPy, pandas, Linear algebra, Calculus]
+  must_include: [Overfitting]
+  do_not_include: [deep reinforcement learning]
+assertions:
+  ordering_min: 0.0
+  module_count_band: [3, 60]
+  coverage_min: 0.5

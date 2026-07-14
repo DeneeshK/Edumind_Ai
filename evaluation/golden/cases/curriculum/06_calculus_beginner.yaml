@@ -1,0 +1,14 @@
+name: calculus_beginner
+description: Introductory calculus for a complete beginner — medium pace.
+profile:
+  topic: Calculus
+  goal: Build a solid foundation in single-variable calculus
+  learner_level: complete beginner
+  pace: medium
+  prior_knowledge: Knows high-school algebra, no calculus.
+  must_include: [Derivatives, Limits]
+  do_not_include: [multivariable calculus, differential geometry]
+assertions:
+  ordering_min: 0.0
+  module_count_band: [4, 60]
+  coverage_min: 0.5

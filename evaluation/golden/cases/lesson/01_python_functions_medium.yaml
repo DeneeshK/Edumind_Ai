@@ -1,0 +1,24 @@
+name: python_functions_medium
+description: Medium-pace programming lesson on functions.
+course:
+  id: golden-lesson-1
+  topic: Python programming
+  goal: Build small automation scripts
+  pace: medium
+  personalization_profile:
+    learner_level: some basic knowledge
+    roadmap_steps: [Learn variables, Learn functions]
+module:
+  id: L1
+  title: Functions
+  concept: Functions
+  concepts_taught: [Functions, Parameters, Return values]
+  question_scope: [Functions, Parameters, Return values]
+  must_teach: [Functions, Return values]
+  prerequisites: [Variables]
+  description: Reusable blocks of code with inputs and outputs.
+assertions:
+  required_concepts: [Functions, Parameters, Return values]
+  length_band_words: [120, 2000]
+  has_practice: true
+  quality_min: 0.6

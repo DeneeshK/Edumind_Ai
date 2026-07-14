@@ -1,0 +1,19 @@
+name: clearly_wrong
+description: A clearly wrong answer should read as weak mastery.
+module:
+  title: Functions
+  concept: Functions
+  concepts_taught: [Functions, Parameters, Return values]
+  question_scope: [Functions, Return values]
+lesson_excerpt: |
+  A function is a reusable block of code defined with `def`. The `return` statement
+  sends a value back to the caller and ends the function. `print` displays text on
+  the screen but does not send any value back to the caller.
+question:
+  question_text: What does the `return` statement do in a function?
+  concepts_tested: [Return values]
+answer: The return statement prints the answer on the screen so the user can read it.
+confidence: 4
+expect:
+  mastery_signal: [weak, uncertain]
+  weak_concepts_must_not: []

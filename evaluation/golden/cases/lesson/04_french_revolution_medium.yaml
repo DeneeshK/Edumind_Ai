@@ -1,0 +1,24 @@
+name: french_revolution_medium
+description: Medium-pace humanities lesson — non-STEM variety.
+course:
+  id: golden-lesson-4
+  topic: The French Revolution
+  goal: Understand the causes and course of the French Revolution
+  pace: medium
+  personalization_profile:
+    learner_level: some basic knowledge
+    roadmap_steps: [Ancien Regime, Financial crisis]
+module:
+  id: L4
+  title: Causes of the French Revolution
+  concept: Causes of the French Revolution
+  concepts_taught: [Financial crisis, Social inequality, Enlightenment ideas]
+  question_scope: [Financial crisis, Social inequality]
+  must_teach: [Financial crisis, Social inequality]
+  prerequisites: [Ancien Regime]
+  description: The economic, social, and intellectual roots of 1789.
+assertions:
+  required_concepts: [Financial crisis, Social inequality, Enlightenment ideas]
+  length_band_words: [150, 2500]
+  has_practice: true
+  quality_min: 0.6

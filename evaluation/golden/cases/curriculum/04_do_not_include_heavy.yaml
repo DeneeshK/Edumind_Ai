@@ -1,0 +1,13 @@
+name: do_not_include_heavy
+description: Beginner JavaScript with many explicit exclusions — stresses do_not_include.
+profile:
+  topic: JavaScript
+  goal: Learn core JavaScript for simple browser scripting
+  learner_level: complete beginner
+  pace: fast
+  prior_knowledge: No programming background.
+  do_not_include: [React, Angular, Vue, TypeScript, Node.js, webpack, jQuery]
+assertions:
+  ordering_min: 0.0
+  module_count_band: [3, 40]
+  coverage_min: 0.5

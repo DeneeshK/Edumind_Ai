@@ -1,0 +1,15 @@
+name: dsa_interview
+description: Data structures & algorithms for interview prep — deep pace.
+profile:
+  topic: Data structures and algorithms
+  goal: Prepare for software engineering coding interviews
+  learner_level: some basic knowledge
+  pace: deep
+  prior_knowledge: Can write basic Python programs with loops and functions.
+  known_concepts: [Variables, Loops]
+  must_include: [Arrays, Trees]
+  do_not_include: [distributed systems]
+assertions:
+  ordering_min: 0.0
+  module_count_band: [4, 85]
+  coverage_min: 0.5

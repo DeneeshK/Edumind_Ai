@@ -1,0 +1,14 @@
+name: thermodynamics
+description: Physics thermodynamics at deep pace — a hard STEM subject.
+profile:
+  topic: Thermodynamics
+  goal: Understand thermodynamics for a university physics course
+  learner_level: some basic knowledge
+  pace: deep
+  prior_knowledge: Comfortable with high-school algebra and basic mechanics.
+  must_include: [Entropy, First Law]
+  do_not_include: [quantum field theory]
+assertions:
+  ordering_min: 0.0
+  module_count_band: [4, 85]
+  coverage_min: 0.5

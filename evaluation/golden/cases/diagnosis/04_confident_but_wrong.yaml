@@ -1,0 +1,23 @@
+name: confident_but_wrong
+description: High stated confidence but a wrong answer (calibration) must not read as clear.
+module:
+  title: Python scope
+  concept: Variable scope
+  concepts_taught: [Local scope, Global scope, Variable shadowing]
+  question_scope: [Local scope, Global scope]
+lesson_excerpt: |
+  A variable assigned inside a function is local to that function and cannot be seen
+  from outside it. To read a module-level (global) variable inside a function you can
+  reference it directly, but assigning to it inside the function creates a new local
+  variable unless you use the `global` keyword.
+question:
+  question_text: >-
+    If you assign to a variable inside a function without `global`, can code outside
+    the function see that new value?
+  concepts_tested: [Local scope, Global scope]
+answer: >-
+  Yes, definitely. Assigning inside a function always updates the variable everywhere
+  in the program, so any code outside the function will see the new value.
+confidence: 5
+expect:
+  mastery_signal_not: [clear]

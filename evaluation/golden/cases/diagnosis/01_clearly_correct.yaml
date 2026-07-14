@@ -1,0 +1,22 @@
+name: clearly_correct
+description: A clearly correct, well-reasoned answer should read as clear mastery.
+module:
+  title: Functions
+  concept: Functions
+  concepts_taught: [Functions, Parameters, Return values]
+  question_scope: [Functions, Return values]
+lesson_excerpt: |
+  A function is a reusable block of code defined with `def`. Parameters let you pass
+  data in. The `return` statement sends a value back to the caller and ends the
+  function. If there is no return, the function returns None.
+question:
+  question_text: What does the `return` statement do in a function?
+  concepts_tested: [Return values]
+answer: >-
+  The return statement sends a value back to whoever called the function and stops
+  the function early. For example, `def add(a, b): return a + b` gives back a + b.
+  If a function has no return, it returns None.
+confidence: 4
+expect:
+  mastery_signal: [clear]
+  weak_concepts_must_not: [Return values]

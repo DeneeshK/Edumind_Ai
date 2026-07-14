@@ -60,3 +60,5 @@ prometheus-client==0.17.0
 opentelemetry-sdk==1.43.0
 opentelemetry-exporter-otlp-proto-http==1.43.0
 opentelemetry-instrumentation-fastapi==0.64b0
+# Golden eval case files (evaluation/golden/cases/*.yaml)
+PyYAML==6.0.3
