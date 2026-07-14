@@ -173,6 +173,25 @@ async def start_session(
     module_id: str,
     student_id: str,
 ) -> dict[str, Any]:
+    """Workflow-span wrapper: groups the whole evaluation session start."""
+    from core.tracing import get_tracer
+
+    with get_tracer().start_as_current_span("workflow.eval.start_session") as span:
+        if span.is_recording():
+            span.set_attribute("edumind.course_id", str(course_id))
+            span.set_attribute("edumind.module_id", str(module_id))
+            span.set_attribute("edumind.student_id", str(student_id))
+        result = await _start_session_impl(course_id, module_id, student_id)
+        if span.is_recording() and isinstance(result, dict) and result.get("session_id"):
+            span.set_attribute("edumind.session_id", str(result["session_id"]))
+        return result
+
+
+async def _start_session_impl(
+    course_id: str,
+    module_id: str,
+    student_id: str,
+) -> dict[str, Any]:
     """
     Start an evaluation session after the student clicks Next/Complete.
     Returns session_id and the first batch of base questions.
@@ -330,6 +349,28 @@ async def start_session(
 
 
 async def submit_answer(
+    session_id: str,
+    question_id: str,
+    answer_text: str,
+    confidence: int = 3,
+) -> dict[str, Any]:
+    """Workflow-span wrapper around one answer submission.
+
+    Records the answer LENGTH only — never the answer text — per the learner
+    privacy rule for span attributes.
+    """
+    from core.tracing import get_tracer
+
+    with get_tracer().start_as_current_span("workflow.eval.submit_answer") as span:
+        if span.is_recording():
+            span.set_attribute("edumind.session_id", str(session_id))
+            span.set_attribute("edumind.question_id", str(question_id))
+            span.set_attribute("edumind.answer_len", len(answer_text or ""))
+            span.set_attribute("edumind.confidence", int(confidence))
+        return await _submit_answer_impl(session_id, question_id, answer_text, confidence)
+
+
+async def _submit_answer_impl(
     session_id: str,
     question_id: str,
     answer_text: str,
@@ -545,6 +586,41 @@ async def submit_answer(
 
 
 async def _finalize(
+    *,
+    session_id: str,
+    course: dict[str, Any],
+    module: dict[str, Any],
+    mod_ctx: dict[str, Any],
+    lesson_content: str,
+    answers: list[dict[str, Any]],
+    student_id: str,
+    course_id: str,
+    module_id: str,
+) -> dict[str, Any]:
+    """Workflow-span wrapper around session finalization (report + decision)."""
+    from core.tracing import get_tracer
+
+    with get_tracer().start_as_current_span("workflow.eval.finalize") as span:
+        if span.is_recording():
+            span.set_attribute("edumind.session_id", str(session_id))
+            span.set_attribute("edumind.course_id", str(course_id))
+            span.set_attribute("edumind.module_id", str(module_id))
+            span.set_attribute("edumind.student_id", str(student_id))
+            span.set_attribute("edumind.answer_count", len(answers or []))
+        return await _finalize_impl(
+            session_id=session_id,
+            course=course,
+            module=module,
+            mod_ctx=mod_ctx,
+            lesson_content=lesson_content,
+            answers=answers,
+            student_id=student_id,
+            course_id=course_id,
+            module_id=module_id,
+        )
+
+
+async def _finalize_impl(
     *,
     session_id: str,
     course: dict[str, Any],

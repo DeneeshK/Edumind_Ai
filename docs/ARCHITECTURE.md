@@ -147,3 +147,65 @@ private learner text.
 - `evaluation/` can write session and aggregate evaluation reports.
 
 See [Logging](LOGGING.md) for safe logging rules.
+
+### Token and cost accounting (Prometheus)
+
+Every Groq call records token usage from `response.usage`:
+
+- `edumind_llm_tokens_total{model, caller, direction}` — `direction` is
+  `prompt` or `completion`. `caller` is the agent name (threaded through
+  `generate()`, `tool_call_loop()`, and `stream()`), so tokens attribute to the
+  agent that spent them.
+- `edumind_llm_cost_usd_total{model, caller}` — estimated USD cost, computed
+  from `GROQ_MODEL_PRICES` in `config.py`.
+
+`GROQ_MODEL_PRICES` ships with **placeholder zeros**; a maintainer must fill in
+current Groq pricing. Cost is **not** recorded for any model priced at `(0, 0)`,
+so the metric never emits an invented number. Streamed calls have no exact token
+count from `groq==0.9.0`, so completion tokens are **estimated** as
+`len(text)//4` and marked (`gen_ai.usage.is_estimate` on the span).
+
+### Distributed tracing (OpenTelemetry → Phoenix)
+
+Tracing is **opt-in**. With `OTEL_ENABLED=false` (the default) no exporter and no
+`TracerProvider` are installed, so every span call is a zero-cost no-op and prod
+is unaffected. `core/tracing.py` is initialised from the app lifespan
+(`app/api.py`); it installs an OTLP/HTTP exporter (`OTEL_EXPORTER_ENDPOINT`,
+default `http://localhost:6006/v1/traces`) behind a `BatchSpanProcessor`. An
+exporter/collector being down never breaks a request.
+
+Trace hierarchy for one request:
+
+```
+HTTP span                         (FastAPI auto-instrumentation)
+  └─ workflow span                (workflow.create_course /
+     │                             workflow.generate_module_lesson /
+     │                             workflow.eval.start_session|submit_answer|finalize)
+     └─ agent.run span            (base_agent — edumind.agent, edumind.student_id)
+          ├─ groq.generate /      (LLM spans — gen_ai.request.model,
+          │  groq.tool_call_loop / gen_ai.usage.input_tokens/output_tokens,
+          │  groq.stream           gen_ai.usage.cost_usd, edumind.caller)
+          ├─ agent.tool span      (tool executor — edumind.tool, result_len)
+          └─ mcp.tool_call span   (mcp_search_client — tool, namespace)
+```
+
+LLM spans follow the OTel **GenAI** semantic conventions (`gen_ai.*`). Groq calls
+run inside `asyncio.to_thread`; spans are created in the async wrapper (never
+inside the thread) so parenting survives the thread hop. `base_agent.run()`'s
+`agent.run` span replaces the old per-run `uuid4` trace id — the TRACE log line
+now carries the real OTel `trace_id` so logs cross-reference the trace in Phoenix.
+
+**Learner privacy:** `student_id`/`course_id`/`session_id` are attached as span
+attributes (not logged). Student answer text and full lesson text are **never**
+put on spans — only lengths and ≤200-char excerpts (`core/tracing.excerpt`).
+
+**Running Phoenix (dev/demo only):**
+
+```bash
+docker compose -f monitoring/docker-compose.monitoring.yml up -d phoenix
+OTEL_ENABLED=true OTEL_EXPORTER_ENDPOINT=http://localhost:6006/v1/traces \
+  uvicorn app.api:app --port 8000
+# open the Phoenix UI at http://localhost:6006
+```
+
+Phoenix is **off by default in prod** and gated entirely by `OTEL_ENABLED`.

@@ -118,6 +118,10 @@ limiter = Limiter(key_func=get_remote_address)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize shared services at startup and flush in-flight sessions at shutdown."""
+    from core.tracing import init_tracing
+
+    # Opt-in distributed tracing. No-op (and no exporter) unless OTEL_ENABLED=true.
+    init_tracing(app)
     await init_db()
     if settings.eval_enabled:
         from evaluation.scheduler import start_scheduler
@@ -149,6 +153,9 @@ async def lifespan(app: FastAPI):
 
         stop_scheduler()
     await close_db()
+    from core.tracing import shutdown_tracing
+
+    shutdown_tracing()
     logger.info("EduMind API shut down.")
 
 

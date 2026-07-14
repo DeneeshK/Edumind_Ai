@@ -4,6 +4,13 @@ version: "3.8"
 #
 # Prometheus UI: http://localhost:9090
 # Grafana UI:    http://localhost:3000  (admin / edumind123)
+# Phoenix UI:    http://localhost:6006  (dev/demo tracing only — see below)
+#
+# Phoenix is for DEV/DEMO trace profiling. It is OFF by default in production:
+# the backend only exports spans when OTEL_ENABLED=true (default false), and even
+# when Phoenix is down an exporter failure never breaks a request. To profile a
+# request end-to-end locally, start this stack and run the API with
+# OTEL_ENABLED=true / OTEL_EXPORTER_ENDPOINT=http://localhost:6006/v1/traces.
 
 services:
   prometheus:
@@ -40,6 +47,22 @@ services:
       - prometheus
     restart: unless-stopped
 
+  # ── Phoenix (Arize) — OpenTelemetry trace UI, DEV/DEMO ONLY ─────────────────
+  # Receives OTLP/HTTP spans on :6006 (/v1/traces) from the backend when the app
+  # is run with OTEL_ENABLED=true. Not part of the prod monitoring path — leave
+  # OTEL_ENABLED=false in prod and this container simply receives nothing.
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: edumind_phoenix
+    ports:
+      - "6006:6006"   # UI + OTLP/HTTP collector (/v1/traces)
+    volumes:
+      - phoenix_data:/mnt/data
+    environment:
+      - PHOENIX_WORKING_DIR=/mnt/data
+    restart: unless-stopped
+
 volumes:
   prometheus_data:
   grafana_data:
+  phoenix_data:

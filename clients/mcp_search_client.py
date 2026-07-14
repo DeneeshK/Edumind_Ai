@@ -63,15 +63,26 @@ async def _call(tool: str, args: dict) -> dict:
     """
     if not is_enabled():
         return {}
-    try:
-        async with sse_client(settings.mcp_search_server_url) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                result = await session.call_tool(tool, args)
-                return _unwrap(result)
-    except Exception as exc:
-        logger.warning("MCP search tool '{}' failed: {} — degrading to empty.", tool, exc)
-        return {}
+    from core.tracing import get_tracer
+
+    with get_tracer().start_as_current_span("mcp.tool_call") as span:
+        if span.is_recording():
+            span.set_attribute("edumind.mcp.tool", tool)
+            namespace = args.get("namespace") if isinstance(args, dict) else None
+            if namespace:
+                span.set_attribute("edumind.mcp.namespace", str(namespace))
+        try:
+            async with sse_client(settings.mcp_search_server_url) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(tool, args)
+                    return _unwrap(result)
+        except Exception as exc:
+            # Degrade to empty (never surface to the student), but mark the span.
+            if span.is_recording():
+                span.record_exception(exc)
+            logger.warning("MCP search tool '{}' failed: {} — degrading to empty.", tool, exc)
+            return {}
 
 
 # ── High-level helpers ────────────────────────────────────────────────────────

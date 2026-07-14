@@ -50,3 +50,13 @@ pytest-asyncio==0.23.8
 
 #prometheus
 prometheus-client==0.17.0
+
+# OpenTelemetry tracing (opt-in via OTEL_ENABLED; see docs/ARCHITECTURE.md).
+# These SDK/exporter/instrumentation pins match the versions verified in this
+# repo's venv. NOTE: requirements_working.txt lists an older 1.27.0/0.48b0 line
+# — if you rebuild the env from that file, bump these to match (they must move
+# together; the instrumentation *bNN version tracks the same release train as
+# the sdk/api 1.NN version).
+opentelemetry-sdk==1.43.0
+opentelemetry-exporter-otlp-proto-http==1.43.0
+opentelemetry-instrumentation-fastapi==0.64b0

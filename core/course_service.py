@@ -786,6 +786,43 @@ async def create_course(
     personalization_profile: dict[str, Any] | None = None,
     web_search_enabled: bool = False,
 ) -> dict[str, Any]:
+    """Workflow-level span wrapper around course creation.
+
+    Groups every agent/LLM/tool span produced while building one course under a
+    single "workflow.create_course" span (student_id + resulting course_id).
+    """
+    from core.tracing import get_tracer, excerpt
+
+    with get_tracer().start_as_current_span("workflow.create_course") as span:
+        if span.is_recording():
+            span.set_attribute("edumind.student_id", str(student_id))
+            span.set_attribute("edumind.pace", pace)
+            span.set_attribute("edumind.topic_excerpt", excerpt(topic))
+        course = await _create_course_impl(
+            student_id=student_id,
+            topic=topic,
+            goal=goal,
+            pace=pace,
+            prior_knowledge=prior_knowledge,
+            name=name,
+            personalization_profile=personalization_profile,
+            web_search_enabled=web_search_enabled,
+        )
+        if span.is_recording() and isinstance(course, dict) and course.get("id"):
+            span.set_attribute("edumind.course_id", str(course["id"]))
+        return course
+
+
+async def _create_course_impl(
+    student_id: str,
+    topic: str,
+    goal: str,
+    pace: str = "medium",
+    prior_knowledge: str = "",
+    name: str = "Student",
+    personalization_profile: dict[str, Any] | None = None,
+    web_search_enabled: bool = False,
+) -> dict[str, Any]:
     """
     Create a persisted course, modules, master roadmap, and frontend roadmap.
 
@@ -1668,6 +1705,23 @@ Pace-specific requirements:
 
 
 async def generate_module_lesson(
+    course_id: str,
+    module_id: str,
+    student_id: str | None = None,
+) -> dict[str, Any]:
+    """Workflow-level span wrapper around lesson generation for one module."""
+    from core.tracing import get_tracer
+
+    with get_tracer().start_as_current_span("workflow.generate_module_lesson") as span:
+        if span.is_recording():
+            span.set_attribute("edumind.course_id", str(course_id))
+            span.set_attribute("edumind.module_id", str(module_id))
+            if student_id:
+                span.set_attribute("edumind.student_id", str(student_id))
+        return await _generate_module_lesson_impl(course_id, module_id, student_id)
+
+
+async def _generate_module_lesson_impl(
     course_id: str,
     module_id: str,
     student_id: str | None = None,

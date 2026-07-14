@@ -25,6 +25,16 @@ from groq import RateLimitError, APITimeoutError
 from loguru import logger
 
 from config import settings, compute_llm_cost_usd
+from core.tracing import (
+    get_tracer,
+    GEN_AI_SYSTEM,
+    GEN_AI_REQUEST_MODEL,
+    GEN_AI_USAGE_INPUT_TOKENS,
+    GEN_AI_USAGE_OUTPUT_TOKENS,
+    GEN_AI_USAGE_COST_USD,
+    GEN_AI_USAGE_IS_ESTIMATE,
+    EDUMIND_CALLER,
+)
 
 
 # ── Custom exceptions ─────────────────────────────────────────────────────────
@@ -151,6 +161,34 @@ def _record_usage(
         return None
 
 
+def _annotate_llm_span(
+    span,
+    model: str,
+    caller: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cost: float | None,
+    *,
+    estimated: bool = False,
+) -> None:
+    """Attach GenAI-convention usage attributes to an LLM span.
+
+    A no-op when the span is non-recording (tracing disabled). Never raises.
+    """
+    if span is None or not span.is_recording():
+        return
+    span.set_attribute(GEN_AI_SYSTEM, "groq")
+    span.set_attribute(GEN_AI_REQUEST_MODEL, model)
+    span.set_attribute(EDUMIND_CALLER, caller)
+    if prompt_tokens:
+        span.set_attribute(GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens)
+    span.set_attribute(GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens)
+    if cost is not None:
+        span.set_attribute(GEN_AI_USAGE_COST_USD, cost)
+    if estimated:
+        span.set_attribute(GEN_AI_USAGE_IS_ESTIMATE, True)
+
+
 def _extract_usage(response: Any) -> tuple[int, int]:
     """Pull (prompt_tokens, completion_tokens) from a Groq response.usage.
 
@@ -261,21 +299,26 @@ async def generate(
 
     _m.llm_requests.labels(model=model, caller=_caller).inc()
     _start = _time.perf_counter()
-    try:
-        response = await _with_retry(_call)
-        _m.llm_latency.labels(model=model).observe(_time.perf_counter() - _start)
-        prompt_tokens, completion_tokens = _extract_usage(response)
-        _record_usage(model, _caller, prompt_tokens, completion_tokens)
-        return response.choices[0].message.content
-    except GroqTimeoutError:
-        _m.llm_errors.labels(model=model, error_type="timeout").inc()
-        raise
-    except GroqRateLimitError:
-        _m.llm_errors.labels(model=model, error_type="rate_limit").inc()
-        raise
-    except Exception:
-        _m.llm_errors.labels(model=model, error_type="other").inc()
-        raise
+    # Span is created in the async context (not inside asyncio.to_thread), so it
+    # parents correctly under the caller's span across the thread hop.
+    with get_tracer().start_as_current_span("groq.generate") as span:
+        _annotate_llm_span(span, model, _caller, 0, 0, None)
+        try:
+            response = await _with_retry(_call)
+            _m.llm_latency.labels(model=model).observe(_time.perf_counter() - _start)
+            prompt_tokens, completion_tokens = _extract_usage(response)
+            cost = _record_usage(model, _caller, prompt_tokens, completion_tokens)
+            _annotate_llm_span(span, model, _caller, prompt_tokens, completion_tokens, cost)
+            return response.choices[0].message.content
+        except GroqTimeoutError:
+            _m.llm_errors.labels(model=model, error_type="timeout").inc()
+            raise
+        except GroqRateLimitError:
+            _m.llm_errors.labels(model=model, error_type="rate_limit").inc()
+            raise
+        except Exception:
+            _m.llm_errors.labels(model=model, error_type="other").inc()
+            raise
 
 
 # ── tool_call_loop() ──────────────────────────────────────────────────────────
@@ -369,43 +412,48 @@ async def tool_call_loop(
                 timeout=settings.groq_timeout_seconds,
             )
 
-        try:
-            response = await _with_retry(_call)
-        except Exception as exc:
-            failed_generation = _extract_failed_generation(exc)
-            recovered = (
-                _recover_tool_call_from_text(failed_generation)
-                if failed_generation else None
-            )
-            if not recovered:
-                raise
-
-            recovered_name, recovered_args = recovered
-            logger.warning(
-                "Recovered malformed Groq tool generation: tool='{}' args_type='{}'",
-                recovered_name, type(recovered_args).__name__,
-            )
-
-            if recovered_name == terminal_tool_name:
-                logger.info(
-                    "Recovered terminal tool '{}' from failed_generation.",
-                    recovered_name,
+        # Span per LLM call within the loop. Created in the async context so it
+        # parents under the agent span across the asyncio.to_thread hop.
+        with get_tracer().start_as_current_span("groq.tool_call_loop") as span:
+            _annotate_llm_span(span, model, _caller, 0, 0, None)
+            try:
+                response = await _with_retry(_call)
+            except Exception as exc:
+                failed_generation = _extract_failed_generation(exc)
+                recovered = (
+                    _recover_tool_call_from_text(failed_generation)
+                    if failed_generation else None
                 )
-                return _filter_terminal_args(recovered_name, recovered_args)
+                if not recovered:
+                    raise
 
-            result_str = await _execute_non_terminal(recovered_name, recovered_args)
-            messages.append({
-                "role": "user",
-                "content": (
-                    "Recovered and executed malformed tool call "
-                    f"'{recovered_name}'. Tool result:\n{result_str}\n\n"
-                    "Continue. Use the structured JSON tool-call format only."
-                ),
-            })
-            continue
+                recovered_name, recovered_args = recovered
+                logger.warning(
+                    "Recovered malformed Groq tool generation: tool='{}' args_type='{}'",
+                    recovered_name, type(recovered_args).__name__,
+                )
 
-        prompt_tokens, completion_tokens = _extract_usage(response)
-        _record_usage(model, _caller, prompt_tokens, completion_tokens)
+                if recovered_name == terminal_tool_name:
+                    logger.info(
+                        "Recovered terminal tool '{}' from failed_generation.",
+                        recovered_name,
+                    )
+                    return _filter_terminal_args(recovered_name, recovered_args)
+
+                result_str = await _execute_non_terminal(recovered_name, recovered_args)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Recovered and executed malformed tool call "
+                        f"'{recovered_name}'. Tool result:\n{result_str}\n\n"
+                        "Continue. Use the structured JSON tool-call format only."
+                    ),
+                })
+                continue
+
+            prompt_tokens, completion_tokens = _extract_usage(response)
+            cost = _record_usage(model, _caller, prompt_tokens, completion_tokens)
+            _annotate_llm_span(span, model, _caller, prompt_tokens, completion_tokens, cost)
 
         message = response.choices[0].message
 
@@ -574,6 +622,11 @@ async def stream(
     thread_future = asyncio.to_thread(_blocking_stream_to_queue)
     task = asyncio.create_task(thread_future)
 
+    # Manual span (started, not context-managed) so it survives the generator's
+    # yield-suspends; the parent is the context active at first iteration.
+    span = get_tracer().start_span("groq.stream")
+    _annotate_llm_span(span, model, _caller, 0, 0, None)
+
     streamed_chars = 0
     try:
         while True:
@@ -582,15 +635,20 @@ async def stream(
                 break
             streamed_chars += len(chunk)
             yield chunk
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError as exc:
         logger.warning("stream(): chunk_queue timed out — cancelling stream task")
         task.cancel()
+        if span.is_recording():
+            span.record_exception(exc)
         raise GroqTimeoutError("Groq stream timed out waiting for chunk")
     finally:
         # Estimate completion tokens from streamed length — the SDK gives us no
         # exact count for streams (see the docstring). Prompt tokens unknown → 0.
         if streamed_chars:
-            _record_usage(model, _caller, 0, streamed_chars // 4, estimated=True)
+            est_completion = streamed_chars // 4
+            cost = _record_usage(model, _caller, 0, est_completion, estimated=True)
+            _annotate_llm_span(span, model, _caller, 0, est_completion, cost, estimated=True)
+        span.end()
         # Ensure the thread task is awaited to avoid ResourceWarning
         try:
             await task

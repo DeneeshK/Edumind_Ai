@@ -38,46 +38,60 @@ from config import settings
 def _trace_agent_run(run_fn):
     """
     Decorator for BaseAgent.run().
-    Records: agent name, student_id, wall-clock latency, tool call count,
-    approximate token usage (from response usage field when available).
-    Emits as a structured JSON log line at INFO level.
+
+    Opens an OpenTelemetry span per agent run (agent name + student_id) that
+    parents the LLM/tool spans emitted deeper in the stack. The correlation id
+    is the REAL OTel trace_id (not a per-run uuid4 as before), so the TRACE log
+    line cross-references the trace in Phoenix. When tracing is disabled the span
+    is a no-op and we fall back to a short uuid for the log line only.
     """
     @functools.wraps(run_fn)
     async def wrapper(self, system, user_message, context="", model=None):
         """Run one traced agent call and emit its final trace record."""
         import uuid
-        trace_id = str(uuid.uuid4())[:8]
+        from core.tracing import get_tracer, current_trace_id_hex
+
         t0 = time.perf_counter()
-        self._trace_id = trace_id
         self._tool_calls_this_run: list[dict] = []
 
-        try:
-            result = await run_fn(self, system, user_message, context, model)
-        except Exception as exc:
-            elapsed = round(time.perf_counter() - t0, 3)
-            logger.opt(lazy=True).info(
-                "TRACE agent={agent} trace={trace} student={student} "
-                "status=error error={error} latency_s={lat}",
-                agent=lambda: self.NAME,
-                trace=lambda: trace_id,
-                student=lambda: self.state.student_id,
-                error=lambda: str(exc),
-                lat=lambda: elapsed,
-            )
-            raise
+        with get_tracer().start_as_current_span("agent.run") as span:
+            if span.is_recording():
+                span.set_attribute("edumind.agent", self.NAME)
+                student_id = getattr(self.state, "student_id", None)
+                if student_id:
+                    span.set_attribute("edumind.student_id", str(student_id))
+            # Correlate logs with the trace: real trace_id when tracing is on,
+            # else a short uuid so the log line still carries an id.
+            trace_id = current_trace_id_hex() or str(uuid.uuid4())[:8]
+            self._trace_id = trace_id
 
-        elapsed = round(time.perf_counter() - t0, 3)
-        logger.info(
-            "TRACE | agent={} trace={} student={} status=ok "
-            "tool_calls={} latency_s={} tools={}",
-            self.NAME,
-            trace_id,
-            self.state.student_id,
-            len(self._tool_calls_this_run),
-            elapsed,
-            [t["name"] for t in self._tool_calls_this_run],
-        )
-        return result
+            try:
+                result = await run_fn(self, system, user_message, context, model)
+            except Exception as exc:
+                elapsed = round(time.perf_counter() - t0, 3)
+                logger.opt(lazy=True).info(
+                    "TRACE agent={agent} trace={trace} student={student} "
+                    "status=error error={error} latency_s={lat}",
+                    agent=lambda: self.NAME,
+                    trace=lambda: trace_id,
+                    student=lambda: self.state.student_id,
+                    error=lambda: str(exc),
+                    lat=lambda: elapsed,
+                )
+                raise
+
+            elapsed = round(time.perf_counter() - t0, 3)
+            logger.info(
+                "TRACE | agent={} trace={} student={} status=ok "
+                "tool_calls={} latency_s={} tools={}",
+                self.NAME,
+                trace_id,
+                self.state.student_id,
+                len(self._tool_calls_this_run),
+                elapsed,
+                [t["name"] for t in self._tool_calls_this_run],
+            )
+            return result
     return wrapper
 
 
@@ -180,8 +194,16 @@ class BaseAgent:
             except (json.JSONDecodeError, TypeError):
                 args = {"raw": raw}
 
+        from core.tracing import get_tracer
+
         t0 = time.perf_counter()
-        result = await self._execute_tool(tool_name, args)
+        with get_tracer().start_as_current_span("agent.tool") as span:
+            if span.is_recording():
+                span.set_attribute("edumind.agent", self.NAME)
+                span.set_attribute("edumind.tool", tool_name)
+            result = await self._execute_tool(tool_name, args)
+            if span.is_recording():
+                span.set_attribute("edumind.tool.result_len", len(result) if result else 0)
         elapsed = round(time.perf_counter() - t0, 3)
 
         # Record into trace

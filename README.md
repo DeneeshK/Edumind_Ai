@@ -82,6 +82,34 @@ venv/bin/pytest tests/integration -q
 The current test suite uses mocked LLM/auth flows for the lightweight integration
 tests. It should not require real Groq, Google, or Tavily network calls.
 
+## Tracing
+
+Request-scoped distributed tracing (OpenTelemetry) and per-call token/cost
+accounting let you follow **one request through the whole system** — every agent
+step, LLM call, and MCP tool call, with latency, token counts, and estimated
+cost per span.
+
+Tracing is **opt-in and off by default** (`OTEL_ENABLED=false`): with it off, no
+exporter is installed and every span is a zero-cost no-op, so production is
+unaffected. Token/cost metrics (`edumind_llm_tokens_total`,
+`edumind_llm_cost_usd_total`) are always recorded and scraped via `/metrics`.
+
+To profile locally with [Phoenix](https://github.com/Arize-ai/phoenix):
+
+```bash
+docker compose -f monitoring/docker-compose.monitoring.yml up -d phoenix
+OTEL_ENABLED=true OTEL_EXPORTER_ENDPOINT=http://localhost:6006/v1/traces \
+  venv/bin/uvicorn app.api:app --port 8000
+# then hit an endpoint and open http://localhost:6006
+```
+
+<!-- TODO: embed a Phoenix trace screenshot here (HTTP → workflow → agent → LLM/tool spans). -->
+
+Fill in real Groq prices in `GROQ_MODEL_PRICES` (`config.py`) before trusting the
+cost metric — it ships with placeholder zeros and skips cost for unpriced models.
+See [Architecture → Observability](docs/ARCHITECTURE.md#observability) for the
+full span hierarchy and the learner-privacy rules for span attributes.
+
 ## Documentation Index
 
 - [Architecture](docs/ARCHITECTURE.md)

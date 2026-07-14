@@ -138,6 +138,15 @@ class Settings(BaseSettings):
     web_search_default_on: bool = False     # default toggle when the client omits it
     rag_top_k: int = 5                      # chunks to request from the server
 
+    # ── OpenTelemetry tracing (opt-in, off by default) ────────────────────────
+    # When otel_enabled is False (the default) no exporter is installed and every
+    # tracing code path is a zero-cost no-op — prod is unaffected until opted in.
+    # The endpoint points at Phoenix's OTLP/HTTP collector by default; see
+    # monitoring/docker-compose.monitoring.yml and docs/ARCHITECTURE.md.
+    otel_enabled: bool = False
+    otel_exporter_endpoint: str = "http://localhost:6006/v1/traces"
+    otel_service_name: str = "edumind-api"
+
 
 # ── Groq model pricing (USD per 1,000,000 tokens) ─────────────────────────────
 #
