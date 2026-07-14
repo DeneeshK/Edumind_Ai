@@ -34,20 +34,10 @@ tavily-python==0.3.9
 # removed that keyword in 0.28, so keep this pinned until Groq is upgraded.
 httpx==0.27.2
 
-# Vector store and retrieval
-chromadb==0.5.23
-
-# Embeddings and reranking
-# The app loads BAAI/bge-m3 and BAAI/bge-reranker-large through
-# sentence-transformers. Keep transformers on the 4.x line unless you have
-# explicitly tested the 5.x stack.
-sentence-transformers==3.4.1
-transformers==4.46.3
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.5.1+cpu
-numpy==1.26.4
-scipy==1.14.1
-scikit-learn==1.5.2
+# NOTE: chromadb, sentence-transformers, transformers, torch, numpy, scipy and
+# scikit-learn were removed here after the local ChromaDB/BGE retrieval path was
+# deleted — nothing in this backend imports them anymore. Web-search RAG now runs
+# in the standalone edumind_mcp_search server, which pins its own dependencies.
 
 # Scheduler, utilities, logging
 APScheduler==3.10.4

@@ -1,7 +1,10 @@
 """
 clients/tavily_client.py
-search()          — single query, TTL-cached (24h), returns list[dict]
-search_multiple() — multiple queries deduplicated, returns list[dict]
+search()      — single query, TTL-cached (24h), returns list[dict]
+clear_cache() — drop expired (or all) cached entries
+
+Live callers: core/course_service.py uses search() for YouTube video lookup;
+core/student_model.py calls clear_cache() between sessions.
 
 TTL cache: results persist across sessions for 24 hours.
 Same concept queried in a new session costs 0 Tavily API calls.
@@ -27,7 +30,8 @@ from config import settings
 _TTL_SECONDS = 86_400  # 24 hours
 
 # Persist cache to disk so it survives process restarts.
-# Stored alongside ChromaDB so both are cleared together if needed.
+# settings.chromadb_path is retained purely as this cache's directory (the
+# ChromaDB store it was named for has been removed).
 _CACHE_PATH = Path(settings.chromadb_path) / "tavily_cache.json"
 
 # In-memory layer: {key: {"results": [...], "expires_at": float}}
@@ -119,31 +123,6 @@ def search(query: str, max_results: int = 5) -> list[dict]:
     except Exception as e:
         logger.warning("Tavily search failed for key={}: {} — returning []", key[:12], e)
         return []
-
-
-# ── search_multiple() ─────────────────────────────────────────────────────────
-
-def search_multiple(queries: list[str], max_results_each: int = 3) -> list[dict]:
-    """
-    Run multiple search queries and return deduplicated results.
-    Deduplication is by URL.
-    """
-    seen_urls: set[str] = set()
-    combined: list[dict] = []
-
-    for query in queries:
-        results = search(query, max_results=max_results_each)
-        for r in results:
-            url = r.get("url", "")
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                combined.append(r)
-
-    logger.info(
-        "search_multiple: {} queries -> {} unique results",
-        len(queries), len(combined)
-    )
-    return combined
 
 
 # ── clear_cache() ─────────────────────────────────────────────────────────────

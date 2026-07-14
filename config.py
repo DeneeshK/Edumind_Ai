@@ -72,8 +72,11 @@ class Settings(BaseSettings):
     database_url: str = Field(
         ..., description="PostgreSQL connection URL (asyncpg format)"
     )
+    # Retained after ChromaDB was removed: this directory is now used only as the
+    # on-disk Tavily response cache location (clients/tavily_client.py). The env
+    # key stays CHROMADB_PATH for deployment compatibility.
     chromadb_path: str = Field(
-        default="./chromadb_data", description="Path to ChromaDB persistent storage"
+        default="./chromadb_data", description="On-disk cache directory (Tavily response cache)"
     )
 
     # Groq Model Names
@@ -119,9 +122,7 @@ class Settings(BaseSettings):
     # Evaluation settings
     eval_enabled: bool = True
     eval_judge_model: str = "llama-3.1-8b-instant"
-    eval_embed_model: str = "all-MiniLM-L6-v2"
     eval_faithfulness_claim_limit: int = 15
-    eval_precision_k: int = 10
     eval_schedule_weekly: bool = True
     eval_schedule_monthly: bool = True
     eval_schedule_timezone: str = "Asia/Kolkata"

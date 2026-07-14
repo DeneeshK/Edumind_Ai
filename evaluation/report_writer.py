@@ -283,27 +283,9 @@ def save_metrics_txt_report(
         SEPARATOR,
         "1. RAG / Retrieval Metrics",
         SEPARATOR,
-        _metric_line(metrics, "HyDE Quality Score", ("hyde_quality", "hyde_quality_score"), missing),
-        _metric_line(
-            metrics,
-            "ChromaDB Precision@K",
-            ("chromadb_precision_at_k", "chromadb_precision", "chromadb_precision_k"),
-            missing,
-        ),
-        _metric_line(
-            metrics,
-            "Tavily/MCP Relevance Score",
-            ("tavily_relevance", "tavily_mcp_relevance", "tavily_relevance_score"),
-            missing,
-        ),
-        _metric_line(
-            metrics,
-            "Tavily/MCP Freshness Score",
-            ("tavily_relevance", "tavily_mcp_freshness", "tavily_freshness"),
-            missing,
-            detail_path=("details", "freshness"),
-        ),
-        _metric_line(metrics, "Reranker Gain Score", ("reranker_gain", "reranker_gain_score"), missing),
+        # HyDE / ChromaDB-precision / Tavily-relevance / reranker-gain lines were
+        # removed with the disabled ChromaDB+Tavily retrieval path. Lesson
+        # faithfulness is the only surviving RAG-axis metric.
         _metric_line(metrics, "RAG Faithfulness Score", ("rag_faithfulness", "rag_faithfulness_score"), missing),
         _metric_line(metrics, "Overall RAG Score", ("rag_score", "overall_rag_score"), missing),
         "",

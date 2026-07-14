@@ -26,7 +26,6 @@ from loguru import logger
 
 from agents.base_agent import BaseAgent
 from core.student_model import StudentState
-from core.rag_pipeline import retrieve
 from config import settings
 
 # ── Section marker the runtime uses to split lesson at checkpoint ─────────────
@@ -649,15 +648,13 @@ You've built the foundation. The next module will take this further — you'll s
     async def _execute_tool(self, tool_name: str, args: dict) -> str:
         """Run tutor tool calls that retrieve context, deliver lessons, or handle doubts."""
         if tool_name == "retrieve_content":
-            chunks = await retrieve(
-                query=args.get("query", args.get("concept", "")),
-                domain=self.state.domain,
-                top_k=5,
-            )
-            self._retrieved_chunks = chunks
-            if not chunks:
-                return "No content found. Use your training knowledge to write the lesson."
-            return f"Retrieved {len(chunks)} chunks:\n\n" + "\n\n".join(chunks[:3])
+            # Retrieval for the legacy session flow was removed together with the
+            # old ChromaDB/Tavily pipeline (core/rag_pipeline.py). The live
+            # /api/courses flow retrieves via clients/mcp_search_client.py instead.
+            # The tool is kept so the tutor's agent loop is unchanged; it now
+            # always reports no chunks, exactly as the disabled pipeline did.
+            self._retrieved_chunks = []
+            return "No content found. Use your training knowledge to write the lesson."
 
         if tool_name == "deliver_lesson":
             lesson_text = args.get("lesson_text", "")

@@ -329,64 +329,9 @@ async def run_offline_evaluation_async(
         "calculated_metrics": {},
     }
 
-    await _store_metric(
-        output,
-        "hyde_quality",
-        lambda: (
-            _metric_fn(modules, "rag_metrics", "hyde_quality_score"),
-            (
-                _require(fixture, "rag.original_query"),
-                _require(fixture, "rag.hyde_answer"),
-                _require(fixture, "rag.ground_truth_concept_card"),
-                session_id,
-                student_id,
-            ),
-            {"dependencies": ("sentence_transformers",)},
-        ),
-    )
-    await _store_metric(
-        output,
-        "chromadb_precision_at_k",
-        lambda: (
-            _metric_fn(modules, "rag_metrics", "chromadb_precision_at_k"),
-            (
-                _require(fixture, "rag.original_query"),
-                _require(fixture, "rag.chromadb_chunks"),
-                session_id,
-                student_id,
-            ),
-            {"dependencies": ("sentence_transformers",)},
-        ),
-    )
-    await _store_metric(
-        output,
-        "tavily_relevance",
-        lambda: (
-            _metric_fn(modules, "rag_metrics", "tavily_relevance_score"),
-            (
-                _require(fixture, "rag.original_query"),
-                _require(fixture, "rag.tavily_results"),
-                session_id,
-                student_id,
-            ),
-            {"dependencies": ("sentence_transformers",)},
-        ),
-    )
-    await _store_metric(
-        output,
-        "reranker_gain",
-        lambda: (
-            _metric_fn(modules, "rag_metrics", "reranker_gain_score"),
-            (
-                _require(fixture, "rag.original_query"),
-                _require(fixture, "rag.chunks_before_rerank"),
-                _require(fixture, "rag.chunks_after_rerank"),
-                session_id,
-                student_id,
-            ),
-            {"dependencies": ("sentence_transformers",)},
-        ),
-    )
+    # HyDE / ChromaDB-precision / Tavily-relevance / reranker-gain metrics were
+    # removed with the disabled ChromaDB+Tavily retrieval path. Only lesson
+    # faithfulness remains on the RAG axis.
     await _store_metric(
         output,
         "rag_faithfulness",
@@ -548,10 +493,6 @@ async def run_offline_evaluation_async(
     await asyncio.sleep(0)
 
     rag_keys = (
-        "hyde_quality",
-        "chromadb_precision_at_k",
-        "tavily_relevance",
-        "reranker_gain",
         "rag_faithfulness",
     )
     agent_keys = (

@@ -59,7 +59,6 @@ from core.student_model import (
     RoadmapStep,
     StudentState,
 )
-# from db.chromadb_client import insert as chroma_insert  # V2: re-enable with ChromaDB
 from db.postgres import get_conn
 
 

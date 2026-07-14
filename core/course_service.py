@@ -36,7 +36,6 @@ from core.curriculum_quality import (
     validate_lesson_quality,
     validate_questions_grounded,
 )
-# from core.rag_pipeline import retrieve  # V2: re-enable when RAG is back
 from core.roadmap_service import CourseRoadmapService
 from core.student_model import StudentState
 from db.postgres import (

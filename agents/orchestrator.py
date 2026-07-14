@@ -62,19 +62,13 @@ class OrchestratorAgent(BaseAgent):
                 topic=topic or curriculum_topic,
                 pace=self.state.pace,
             )
-        from core.rag_pipeline import set_eval_runner
-
-        set_eval_runner(self._eval_runner)
+        # The runner is handed to each agent directly (tutor/evaluator/architect
+        # set `_eval_runner`). The old core/rag_pipeline registration hook was
+        # removed together with the disabled retrieval path.
         return self._eval_runner
 
     def _clear_eval_runner(self) -> None:
-        """Clear the optional evaluation runner from the RAG pipeline."""
-        try:
-            from core.rag_pipeline import clear_eval_runner
-
-            clear_eval_runner()
-        except Exception as exc:
-            logger.warning("clear_eval_runner failed: {}", exc)
+        """Clear the optional evaluation runner for the session."""
         self._eval_runner = None
 
     async def _cli_emit(self, text: str) -> None:

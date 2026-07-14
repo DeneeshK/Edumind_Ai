@@ -26,13 +26,7 @@ from evaluation.metrics.outcome_metrics import (
     mastery_progression_rate,
     session_efficiency_score,
 )
-from evaluation.metrics.rag_metrics import (
-    chromadb_precision_at_k,
-    hyde_quality_score,
-    rag_faithfulness_score,
-    reranker_gain_score,
-    tavily_relevance_score,
-)
+from evaluation.metrics.rag_metrics import rag_faithfulness_score
 
 
 def _avg(values: list[float]) -> float | None:
@@ -82,56 +76,6 @@ class EvaluationRunner:
                 continue
             if isinstance(result, dict):
                 self._metric_results.setdefault(metric_name, []).append(result)
-
-    async def on_rag_retrieve(
-        self,
-        query: str,
-        hypothetical: str,
-        concept_card: str,
-        chroma_chunks_before_rerank: list[str],
-        chroma_chunks_after_rerank: list[str],
-        tavily_results: list[dict],
-    ) -> None:
-        """Run HyDE, precision, Tavily, and reranker metrics for one retrieve() call."""
-        try:
-            results = await asyncio.gather(
-                hyde_quality_score(
-                    query,
-                    hypothetical,
-                    concept_card,
-                    self.session_id,
-                    self.student_id,
-                ),
-                chromadb_precision_at_k(
-                    query,
-                    chroma_chunks_after_rerank,
-                    self.session_id,
-                    self.student_id,
-                ),
-                tavily_relevance_score(
-                    query,
-                    tavily_results,
-                    self.session_id,
-                    self.student_id,
-                ),
-                reranker_gain_score(
-                    query,
-                    chroma_chunks_before_rerank,
-                    chroma_chunks_after_rerank,
-                    self.session_id,
-                    self.student_id,
-                ),
-                return_exceptions=True,
-            )
-            self._remember_metric_results([
-                ("hyde_quality", results[0]),
-                ("chromadb_precision_at_k", results[1]),
-                ("tavily_relevance", results[2]),
-                ("reranker_gain", results[3]),
-            ])
-            self._remember_scores(self._rag_scores, results)
-        except Exception as exc:
-            logger.warning("EvaluationRunner.on_rag_retrieve failed: {}", exc)
 
     async def on_lesson_delivered(
         self,
