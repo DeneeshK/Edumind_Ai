@@ -7,6 +7,21 @@ answers, stores progress in PostgreSQL, and exposes frontend-ready course APIs.
 This repository is backend-only. The frontend is deployed separately and talks
 to this API over authenticated HTTP and Server-Sent Events.
 
+## Live vs Legacy Code Paths
+
+- The deployed frontend uses **only** the course-centric `/api/courses` flow:
+  `app/course_api.py` → `core/course_service.py` → `agents/curriculum_architect.py`
+  + `agents/evaluation_agent.py`, with web-search retrieval via
+  `clients/mcp_search_client.py` (the standalone `edumind_mcp_search` server).
+- A second interactive `/session/*` flow (`app/main.py`, `agents/orchestrator.py`,
+  `agents/tutor.py`, `agents/evaluator.py`, `agents/adaptation_engine.py`) is
+  **legacy** — kept only as a reference implementation, tagged `legacy-session`
+  in `/docs`, and carrying `LEGACY` docstring headers.
+- The old in-process ChromaDB/BGE-embedding/reranker retrieval stack has been
+  removed; it was disabled in production and never served the live flow.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full breakdown.
+
 ## Runtime Components
 
 - FastAPI app: `app/api.py`

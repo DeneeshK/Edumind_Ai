@@ -1,6 +1,10 @@
 """
+LEGACY — interactive CLI/SSE session flow. Not used by the deployed frontend,
+which uses the /api/courses flow (see docs/ARCHITECTURE.md). Kept as a working
+reference implementation of the queue-based interactive session pattern.
+
 app/main.py
-EduMind entry point.
+EduMind entry point (legacy CLI).
 
 Usage:
   New student:      python -m app.main --new

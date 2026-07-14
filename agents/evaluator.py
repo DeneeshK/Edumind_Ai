@@ -1,4 +1,8 @@
 """
+LEGACY — interactive CLI/SSE session flow. Not used by the deployed frontend,
+which uses the /api/courses flow (see docs/ARCHITECTURE.md). Kept as a working
+reference implementation of the queue-based interactive session pattern.
+
 agents/evaluator.py
 EvaluatorAgent — asks 3-5 Socratic questions, scores correctness + depth,
 detects misconceptions, computes calibration delta, writes to DB immediately.

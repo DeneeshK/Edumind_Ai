@@ -1,4 +1,8 @@
 """
+LEGACY — interactive CLI/SSE session flow. Not used by the deployed frontend,
+which uses the /api/courses flow (see docs/ARCHITECTURE.md). Kept as a working
+reference implementation of the queue-based interactive session pattern.
+
 agents/tutor.py
 TutorAgent — delivers a world-class, interactive lesson for one module.
 

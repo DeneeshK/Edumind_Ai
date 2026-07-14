@@ -12,10 +12,32 @@ evaluates answers, adapts future content, and persists state in PostgreSQL.
 | `agents/` | LLM-driven agents for curriculum planning, tutoring, evaluation, adaptation, and reports. |
 | `core/` | Service layer for course creation, lesson generation, roadmap conversion, validation, metrics, and student state models. |
 | `db/` | PostgreSQL connection pool, schema creation, and repository functions. |
-| `clients/` | External provider clients for Groq and Tavily. ChromaDB client is retained for compatibility while retrieval is disabled. |
+| `clients/` | External provider clients: Groq (LLM), Tavily (YouTube video lookup), and the MCP web-search client that reaches the standalone `edumind_mcp_search` server for retrieval. |
 | `evaluation/` | Offline and runtime metrics, evaluation reports, scheduler, and evaluation API endpoints. |
 | `tests/` | Unit and mocked integration tests for service behavior, routes, auth, config, and report writing. |
 | `monitoring/` | Prometheus and Grafana configuration for local/production observability. |
+
+## Live vs Legacy Code Paths
+
+The deployed frontend uses **only** the course-centric `/api/courses` flow.
+A second, older interactive `/session/*` flow (CLI + SSE) is kept as a working
+reference implementation but serves no production traffic. Do not confuse them.
+
+| Concern | Live (`/api/courses`) — serves production | Legacy (`/session/*`) — reference only |
+| --- | --- | --- |
+| HTTP surface | `app/course_api.py`, `app/institution_api.py`, routers mounted in `app/api.py` | `/session/*` endpoints in `app/api.py` (tagged `legacy-session` in `/docs`) |
+| Entry point | `uvicorn app.api:app` (web) | `python -m app.main` (CLI) |
+| Orchestration | `core/course_service.py` | `agents/orchestrator.py` |
+| Curriculum | `agents/curriculum_architect.py` | `agents/curriculum_architect.py` (shared) |
+| Tutoring | `core/course_service.py` lesson generation | `agents/tutor.py` |
+| Evaluation | `agents/evaluation_agent.py` | `agents/evaluator.py` |
+| Adaptation | inline in the course flow | `agents/adaptation_engine.py` |
+| Retrieval | `clients/mcp_search_client.py` → `edumind_mcp_search` server; `clients/tavily_client.py` for YouTube | none (in-process ChromaDB/Tavily RAG removed) |
+
+The five legacy modules (`app/main.py`, `agents/orchestrator.py`,
+`agents/tutor.py`, `agents/evaluator.py`, `agents/adaptation_engine.py`) each
+carry a `LEGACY` docstring header. Tests for the legacy flow live in
+`tests/legacy/` and are not part of the default test run.
 
 ## Runtime Entry Points
 
@@ -49,9 +71,11 @@ uvicorn app.api:app --host 0.0.0.0 --port 8000
    or the SSE generation endpoint.
 2. `core/course_service.py` loads the owned course and module, checks for
    existing generated content, and builds the lesson prompt context.
-3. Lesson generation currently depends on the configured LLMs. Tavily search,
-   ChromaDB retrieval, embeddings, and reranking are disabled in the generation
-   path, with compatibility modules retained so older imports do not break.
+3. Lesson generation depends on the configured LLMs. Web-search retrieval, when a
+   course enables it, runs through `clients/mcp_search_client.py` against the
+   standalone `edumind_mcp_search` server. The old in-process ChromaDB/BGE
+   embedding+reranker retrieval path has been removed (see "Live vs legacy code
+   paths" below).
 4. Generated markdown, optional questions, and optional video metadata are saved
    through `db/postgres.py`.
 5. Later reads return the persisted lesson instead of regenerating it.
@@ -103,10 +127,13 @@ is stored in Docker named volumes and must not be deleted during deployment.
 
 - `clients/groq_client.py` wraps Groq chat completion, streaming, retry, timeout,
   malformed tool-call recovery, and metrics.
-- `clients/tavily_client.py` remains available for search helper compatibility.
-  Current lesson generation is not Tavily-dependent.
-- `db/chromadb_client.py` and `core/rag_pipeline.py` remain as compatibility
-  modules while retrieval/embeddings/reranking are disabled.
+- `clients/tavily_client.py` is used live by `core/course_service.py` to find
+  YouTube videos for a module; its results are cached on disk.
+- `clients/mcp_search_client.py` is the client for web-search RAG, delegating to
+  the standalone `edumind_mcp_search` server.
+- The in-process retrieval stack (`db/chromadb_client.py`, `core/rag_pipeline.py`
+  and the HyDE/ChromaDB/Tavily/reranker evaluation metrics) has been **removed** —
+  it was disabled in production and never served the live flow.
 
 Provider calls must never log API keys, raw prompts, full generated lessons, or
 private learner text.

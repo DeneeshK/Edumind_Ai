@@ -2,19 +2,23 @@
 app/api.py
 EduMind FastAPI server.
 
-Replaces the CLI input() loop with HTTP endpoints + SSE streaming.
+The deployed frontend uses the mounted routers — course_router (the live
+/api/courses flow), institution_router, auth_router and eval_router. See
+docs/ARCHITECTURE.md for the live-vs-legacy breakdown.
 
-Endpoints:
+LEGACY — the /session/* endpoints below (tagged "legacy-session" in /docs) are
+the original interactive CLI/SSE session flow driven by agents/orchestrator.py.
+They are NOT used by the deployed frontend and are kept as a working reference:
   POST /session/start          — start new student or load returning student
-  POST /session/chat           — send a message, receive SSE stream of response
+  GET  /session/stream/{id}    — SSE stream of the session
+  POST /session/chat           — send a message
   POST /session/answer         — submit answer to evaluator question
   POST /session/confidence     — submit confidence rating (1-5)
-  GET  /session/status         — get current session state
-  POST /session/end            — end session, flush to DB
-  GET  /student/{id}/progress  — get mastery + metacognition summary
+  GET  /session/status/{id}    — get current session state
+  POST /session/end/{id}       — end session, flush to DB
 
-Session state is kept in memory (dict keyed by session_id) during a session.
-Persistent state lives in PostgreSQL (loaded/saved by StudentState).
+Legacy session state is kept in memory (dict keyed by session_id) during a
+session. Persistent state lives in PostgreSQL (loaded/saved by StudentState).
 
 Run with:
   uvicorn app.api:app --reload --port 8000
@@ -458,7 +462,7 @@ async def readiness():
 
 
 @app.post("/session/start", response_model=StartResponse,
-          dependencies=[Depends(verify_api_key)])
+          dependencies=[Depends(verify_api_key)], tags=["legacy-session"])
 @limiter.limit("10/minute")
 async def start_session(request: Request, req: StartRequest, background_tasks: BackgroundTasks):
     """
@@ -533,7 +537,7 @@ async def start_session(request: Request, req: StartRequest, background_tasks: B
     )
 
 
-@app.get("/session/stream/{session_id}")
+@app.get("/session/stream/{session_id}", tags=["legacy-session"])
 async def stream_session(
     session_id: str,
     request: Request,
@@ -570,7 +574,7 @@ async def stream_session(
     )
 
 
-@app.post("/session/answer")
+@app.post("/session/answer", tags=["legacy-session"])
 @limiter.limit("60/minute")
 async def submit_answer(request: Request, req: AnswerRequest):
     """
@@ -589,7 +593,7 @@ async def submit_answer(request: Request, req: AnswerRequest):
     return {"status": "ok", "message": "Answer received"}
 
 
-@app.post("/session/confidence")
+@app.post("/session/confidence", tags=["legacy-session"])
 @limiter.limit("60/minute")
 async def submit_confidence(request: Request, req: ConfidenceRequest):
     """
@@ -610,7 +614,7 @@ async def submit_confidence(request: Request, req: ConfidenceRequest):
     return {"status": "ok", "confidence": confidence}
 
 
-@app.post("/session/chat")
+@app.post("/session/chat", tags=["legacy-session"])
 @limiter.limit("30/minute")
 async def chat(request: Request, req: ChatRequest):
     """
@@ -639,7 +643,7 @@ async def chat(request: Request, req: ChatRequest):
     return {"status": "ok", "message": "Message noted; session was not awaiting input"}
 
 
-@app.post("/session/end/{session_id}")
+@app.post("/session/end/{session_id}", tags=["legacy-session"])
 async def end_session(session_id: str):
     """
     Manually end a session (e.g. student closes the browser).
@@ -657,7 +661,7 @@ async def end_session(session_id: str):
     return {"status": "ok", "message": "Session ended"}
 
 
-@app.get("/session/status/{session_id}", response_model=SessionStatus)
+@app.get("/session/status/{session_id}", response_model=SessionStatus, tags=["legacy-session"])
 async def get_status(session_id: str):
     """Return current in-memory session state for legacy live sessions."""
     ctx = _sessions.get(session_id)
@@ -736,7 +740,7 @@ async def get_progress(student_id: str):
     }
 
 
-@app.get("/session/trace/{session_id}", dependencies=[Depends(verify_api_key)])
+@app.get("/session/trace/{session_id}", dependencies=[Depends(verify_api_key)], tags=["legacy-session"])
 async def get_session_trace(session_id: str):
     """
     Return the agent execution trace for a session.
