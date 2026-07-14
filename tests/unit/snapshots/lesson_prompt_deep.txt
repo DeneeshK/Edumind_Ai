@@ -1,0 +1,96 @@
+Write a polished markdown lesson for an AI learning platform.
+
+The lesson should feel like a human mentor teaching a focused course page:
+clear, practical, warm, and specific to this learner. Use the planning metadata
+below to decide what to teach, but do not expose raw metadata labels as
+student-facing headings.
+
+Course topic: Python programming
+Student goal: Build web apps with FastAPI
+Pace: deep
+Module title: Functions
+Concept: Functions
+
+Internal planning metadata. Use this as guidance only; do not turn these keys
+into lesson sections:
+{"course_scope_analysis": {"what_to_exclude": ["machine learning"]}, "roadmap_steps": ["First, learn variables.", "Then functions."], "previous_modules_already_taught": [{"title": "Variables", "concepts_taught": ["Variables and Assignment"]}], "concepts_taught_in_this_module_only": ["Functions", "Parameters", "Return values"], "depends_on_concepts": ["Variables and Assignment"], "question_scope_for_later_checks": ["Functions", "Parameters"], "module_description": "Reusable blocks of code.", "purpose": null, "why_it_matters_for_goal": null, "must_teach": ["Functions"], "examples_to_include": [], "practice_type": null, "prerequisites": ["Variables and Assignment"], "why_now": null, "this_module_will_not_cover": ["machine learning"], "lesson_requirements": ["Show a def with parameters and a return."], "practice_requirements": ["Write a function that adds two numbers."]}
+
+Adaptation context:
+{"weak_concepts": ["Scope"], "doubt_concepts": ["Return values"], "recommended_teaching_adjustments": ["Student has weak mastery of: Scope. Add a short prerequisite bridge."], "adaptation_summary": {"example_preference": "more"}, "recent_doubt_messages": ["Why doesn't my function return anything?"]}
+
+ACTION REQUIRED — apply ALL teaching adjustments listed in recommended_teaching_adjustments.
+Student has weak mastery of: Scope. Add a short prerequisite bridge.
+If adaptation_summary contains weak_concepts, add a brief recap of those before the main explanation.
+If adaptation_summary contains example_preference=more, include an extra worked example.
+If adaptation_summary contains pace_adjustment=slower, use smaller steps and more line-by-line explanation.
+If doubt_concepts is non-empty, pre-emptively address each of those concepts with extra clarity.
+If recent_doubt_messages is non-empty, those are questions the student actually asked — answer them inline within the relevant section of this lesson.
+
+Retrieved context:
+
+
+Required teaching flow:
+1. Mentor-style opening / hook that gives the learner one clear reason to care.
+2. What you will be able to do by the end.
+3. Mental model: explain the core idea in plain language before details.
+4. Step-by-step explanation in prerequisite order.
+5. Worked example / demonstration that actually performs the concept.
+6. Line-by-line explanation if code, math, formulas, or structured evidence appears.
+7. Common beginner mistake and how to avoid it.
+8. Mini practice task.
+9. Expected output, expected answer, or solution sketch for that task.
+10. Short recap.
+
+Required concept coverage:
+This module has multiple required concepts. Teach every required concept by name: Functions, Parameters, Return values. For each one, include what it is, when to use it, a simple example or demonstration, and a common beginner mistake. Then compare when to choose each concept before the practice task.
+
+Rules:
+- Teach only Concepts taught in this module, explicitly listed dependencies, and tiny recaps of previous modules.
+- Teach the concrete content listed in the internal must_teach and lesson_requirements metadata.
+- Do not count a shared umbrella word as coverage. For example, teaching only "for loops" does not cover "while loops".
+- Do not introduce concepts outside question_scope_for_later_checks except as a clearly labeled one-sentence preview.
+- Never use excluded/delayed topics from "This module will not cover" as examples, exercises, or questions.
+- Include examples appropriate to the course topic and target context.
+- For programming or coding courses, include concrete runnable code blocks,
+  expected output, a line-by-line explanation, an output prediction moment,
+  and one small modification task. A programming lesson without code is incomplete.
+- For math, physics, chemistry, or science courses, include intuition, formula
+  meaning, concrete quantities, a worked example, a common mistake, and a practice problem.
+- For history, humanities, or social science courses, include context, cause-effect flow,
+  timeline or actors when relevant, evidence/examples, and a misconception to avoid.
+- Treat Retrieved context as optional evidence. Ignore any retrieved chunk that conflicts with this module boundary.
+- Do not include "Any doubts?" or interruptive chat prompts.
+- Any in-lesson check questions must be answerable from this lesson alone.
+- The backend generates the saved check-question objects separately after this lesson exists;
+  do not emit JSON or metadata for those questions inside the lesson.
+- Avoid out-of-syllabus terms unless you define them in the lesson first.
+- Make the lesson feel like a real course page, not a tiny note.
+- Do not write a generic template where the example says only "identify,
+  apply, interpret"; the worked example must actually perform the concept.
+- Do not use student-facing headings named "Must Teach", "Lesson Requirements",
+  "Concepts Taught in this Module", "Practice Requirements", "Question Scope",
+  "Module Goal", or "Why It Matters for Goal".
+- Use markdown headings, but choose natural learner-facing headings.
+
+Pace-specific requirements:
+PACE: DEEP — Student is in researcher mode. They want mastery, not familiarity.
+
+Your job: treat this concept the way a university professor or subject expert would
+in a dedicated lecture. The student has time and genuine curiosity. Reward it.
+
+Content behavior:
+- Open with context: where this concept sits in the broader subject, why it matters
+- Explain the core idea fully, then go deeper — cover the "why behind the why"
+- Break the concept into its sub-components and explain each one individually
+- Include the historical or scientific origin of the idea where relevant
+- Cover at least 3 worked examples at increasing complexity
+- Address competing interpretations, edge cases, or exceptions
+- Connect explicitly to adjacent concepts the student will encounter later
+- Include what experts find interesting, counterintuitive, or still debated
+- Surface common misconceptions at a deeper level than "beginners confuse X with Y"
+- Practice task should require genuine reasoning, not just recall
+
+Do NOT summarize. Do NOT give a surface overview and call it done.
+If a sub-topic deserves its own section, give it one.
+The student expects the depth of a textbook chapter combined with a mentor's clarity.
+Length is a natural byproduct of real depth — write until the concept is truly covered.

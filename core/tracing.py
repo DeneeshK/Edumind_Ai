@@ -41,6 +41,10 @@ GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
 GEN_AI_USAGE_COST_USD = "gen_ai.usage.cost_usd"
 GEN_AI_USAGE_IS_ESTIMATE = "gen_ai.usage.is_estimate"
 
+# Prompt-registry traceability: which versioned prompt artifact drove this call.
+GEN_AI_PROMPT_NAME = "gen_ai.prompt.name"
+GEN_AI_PROMPT_VERSION = "gen_ai.prompt.version"
+
 # EduMind-specific attributes (not part of the GenAI convention).
 EDUMIND_CALLER = "edumind.caller"
 

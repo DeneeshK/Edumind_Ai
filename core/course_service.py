@@ -38,6 +38,8 @@ from core.curriculum_quality import (
 )
 from core.roadmap_service import CourseRoadmapService
 from core.student_model import StudentState
+from prompts import get_prompt
+from prompts.lesson import lesson_pace_requirements
 from db.postgres import (
     bulk_write_decisions,
     create_course_from_plan,
@@ -1226,62 +1228,17 @@ def question_generation_prompt(
     if not lesson_concepts:
         lesson_concepts = _concepts_present_in_lesson(concepts_taught, lesson_content)
     target = {"fast": 2, "medium": 3, "deep": 5}.get(course.get("pace"), 3)
-    return f"""Return STRICT JSON only. No markdown.
-
-Create grounded check questions for this lesson.
-
-{STRICT_QUESTION_RETRY_INSTRUCTION}
-
-Course: {course.get('topic')}
-Goal: {course.get('goal')}
-Module title: {module.get('title')}
-Module concept: {module.get('concept')}
-Allowed concepts_tested: {json.dumps(lesson_concepts, default=str)}
-Target question count: {target}
-
-Previous validation issues:
-{json.dumps(validation_issues, default=str)}
-
-Lesson content:
-\"\"\"
-{lesson_content}
-\"\"\"
-
-Return this exact JSON shape:
-{{
-  "questions": [
-    {{
-      "question_text": "...",
-      "expected_answer": "Use a short phrase or sentence copied exactly from the lesson.",
-      "source_quote": "Copy one exact contiguous quote from the lesson that supports the answer.",
-      "concepts_tested": ["one allowed concept"],
-      "source_section": "Lesson",
-      "is_answerable_from_lesson": true,
-      "difficulty": "simple"
-    }}
-  ]
-}}
-
-Rules:
-- source_quote must be copied verbatim from the lesson content.
-- expected_answer must either be copied verbatim from the lesson or be fully supported by source_quote.
-- concepts_tested must use only Allowed concepts_tested.
-- Allowed concepts_tested has already been filtered to concepts explicitly present in the lesson.
-- Do not mention or test a module concept that is absent from the lesson text.
-- Do not use external knowledge, retrieved context, or future-course concepts.
-- Ban placeholder/meta-question patterns:
-  "According to the lesson...", "What is the key idea about...",
-  "What detail from the lesson explains...", and generic "Why does X matter?"
-- Questions should test understanding, application, prediction, common mistake recognition,
-  or explanation in the learner's own words.
-- For coding lessons, prefer concrete prompts such as output prediction, what a line does,
-  what command to run, what small code change to make, or what beginner mistake causes failure.
-- For math/science lessons, ask what a variable represents, which formula/idea applies,
-  what changes the result, or which common mistake breaks the reasoning.
-- For humanities lessons, ask about causes, consequences, actors, sequence, evidence,
-  or what changed after the event/decision.
-- If you cannot produce enough grounded questions, return fewer questions.
-"""
+    return get_prompt("question_generation_retry").render(
+        strict_retry_instruction=STRICT_QUESTION_RETRY_INSTRUCTION,
+        course_topic=course.get('topic'),
+        goal=course.get('goal'),
+        module_title=module.get('title'),
+        module_concept=module.get('concept'),
+        allowed_concepts_json=json.dumps(lesson_concepts, default=str),
+        target=target,
+        validation_issues_json=json.dumps(validation_issues, default=str),
+        lesson_content=lesson_content,
+    )
 
 
 def _coerce_question_list(raw_questions: Any, module: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1332,6 +1289,8 @@ async def _retry_grounded_questions_with_prompt(
             }],
             model=settings.generation_model,
             system="You are EduMind's grounded question writer. Return strict JSON only.",
+            _prompt_name="question_generation_retry",
+            _prompt_version=get_prompt("question_generation_retry").version,
         )
         data = parse_json_object(raw)
         questions = normalize_question_ids(
@@ -1549,159 +1508,105 @@ def lesson_prompt(
         }
         for item in previous_modules or []
     ]
-    if pace == "fast":
-        pace_requirements = """PACE: FAST — Student is time-constrained and needs capsule learning.
+    pace_requirements = lesson_pace_requirements(pace)
 
-Your job: deliver the essential mental model and one strong worked example. Nothing more.
+    planning_metadata_json = json.dumps({
+        "course_scope_analysis": scope,
+        "roadmap_steps": roadmap_steps,
+        "previous_modules_already_taught": previous_summary,
+        "concepts_taught_in_this_module_only": concepts_taught,
+        "depends_on_concepts": depends_on,
+        "question_scope_for_later_checks": question_scope,
+        "module_description": module.get("description"),
+        "purpose": module.get("purpose") or module.get("module_metadata", {}).get("purpose"),
+        "why_it_matters_for_goal": module.get("why_it_matters_for_goal") or module.get("module_metadata", {}).get("why_it_matters_for_goal"),
+        "must_teach": module.get("must_teach") or module.get("module_metadata", {}).get("must_teach") or [],
+        "examples_to_include": module.get("examples_to_include") or module.get("module_metadata", {}).get("examples_to_include") or [],
+        "practice_type": module.get("practice_type") or module.get("module_metadata", {}).get("practice_type"),
+        "prerequisites": module.get("prerequisites"),
+        "why_now": module.get("why_now") or module.get("module_metadata", {}).get("why_now"),
+        "this_module_will_not_cover": not_cover,
+        "lesson_requirements": lesson_requirements,
+        "practice_requirements": practice_requirements,
+    }, default=str)
 
-Content behavior:
-- Open with a one-sentence "why this matters" hook
-- State the core idea in 2-3 bullet points — no prose paragraphs
-- One concrete worked example that demonstrates the concept directly
-- One "watch out" — the single most common mistake
-- One mini practice task (2-3 sentences max)
-- Short 3-bullet recap
+    return get_prompt("lesson_generation").render(
+        course_topic=course.get('topic'),
+        student_goal=course.get('goal'),
+        pace=pace,
+        module_title=module.get('title'),
+        concept=concept,
+        planning_metadata_json=planning_metadata_json,
+        adaptation_context_json=json.dumps(adaptation_context, default=str),
+        recommended_adjustments=(
+            chr(10).join(adaptation_context.get("recommended_teaching_adjustments") or [])
+            or "No specific adjustments."
+        ),
+        retrieved_context=chr(10).join(context_chunks[:4]),
+        concept_coverage_requirements=concept_coverage_requirements,
+        pace_requirements=pace_requirements,
+    )
 
-Do NOT write flowing paragraphs. Do NOT add background, history, or theory.
-Every sentence must earn its place. If it can be cut, cut it.
-The student should finish in under 5 minutes and walk away with the key idea locked in."""
 
-    elif pace == "deep":
-        pace_requirements = """PACE: DEEP — Student is in researcher mode. They want mastery, not familiarity.
+async def generate_lesson_content(
+    course: dict[str, Any],
+    module: dict[str, Any],
+    adaptation_context: dict[str, Any],
+    previous_modules: list[dict[str, Any]] | None = None,
+    context_chunks: list[str] | None = None,
+) -> str:
+    """
+    Generate validated lesson markdown for one module (prompt + generate path).
 
-Your job: treat this concept the way a university professor or subject expert would
-in a dedicated lecture. The student has time and genuine curiosity. Reward it.
+    Thin seam extracted from ``_generate_module_lesson_impl`` so the same live
+    lesson prompt+generate+validation path can run against pre-built course and
+    module dicts (used by the golden-eval runner) without any DB access.
+    Behaviour is identical to the inline block it replaced. The first generate
+    call may raise (caller handles rate-limit fallback); the validation-retry
+    generate is best-effort.
+    """
+    context_chunks = context_chunks or []
+    _lesson_prompt_meta = get_prompt("lesson_generation")
+    content = await generate(
+        messages=[{
+            "role": "user",
+            "content": lesson_prompt(course, module, context_chunks, adaptation_context, previous_modules),
+        }],
+        model=settings.generation_model,
+        system="You are EduMind's expert course writer. Return markdown only.",
+        _prompt_name=_lesson_prompt_meta.name,
+        _prompt_version=_lesson_prompt_meta.version,
+    )
 
-Content behavior:
-- Open with context: where this concept sits in the broader subject, why it matters
-- Explain the core idea fully, then go deeper — cover the "why behind the why"
-- Break the concept into its sub-components and explain each one individually
-- Include the historical or scientific origin of the idea where relevant
-- Cover at least 3 worked examples at increasing complexity
-- Address competing interpretations, edge cases, or exceptions
-- Connect explicitly to adjacent concepts the student will encounter later
-- Include what experts find interesting, counterintuitive, or still debated
-- Surface common misconceptions at a deeper level than "beginners confuse X with Y"
-- Practice task should require genuine reasoning, not just recall
-
-Do NOT summarize. Do NOT give a surface overview and call it done.
-If a sub-topic deserves its own section, give it one.
-The student expects the depth of a textbook chapter combined with a mentor's clarity.
-Length is a natural byproduct of real depth — write until the concept is truly covered."""
-
-    else:
-        pace_requirements = """PACE: MEDIUM — Standard academic treatment. Clear, complete, supported.
-
-Your job: teach this concept the way a good school or university course would —
-enough to fully understand and apply it, without overwhelming detail.
-
-Content behavior:
-- Clear explanation of what the concept is and why it matters
-- Build intuition before introducing formal definitions or formulas
-- Two worked examples: one simple, one slightly more applied
-- Address one common misconception
-- A guided practice task with an expected answer
-- Connect briefly to what comes next in the course
-
-Write in flowing prose with clear structure. Not too brief, not exhaustive.
-The student should finish feeling they genuinely understand the concept
-and could explain it to someone else."""
-
-    return f"""Write a polished markdown lesson for an AI learning platform.
-
-The lesson should feel like a human mentor teaching a focused course page:
-clear, practical, warm, and specific to this learner. Use the planning metadata
-below to decide what to teach, but do not expose raw metadata labels as
-student-facing headings.
-
-Course topic: {course.get('topic')}
-Student goal: {course.get('goal')}
-Pace: {pace}
-Module title: {module.get('title')}
-Concept: {concept}
-
-Internal planning metadata. Use this as guidance only; do not turn these keys
-into lesson sections:
-{json.dumps({
-    "course_scope_analysis": scope,
-    "roadmap_steps": roadmap_steps,
-    "previous_modules_already_taught": previous_summary,
-    "concepts_taught_in_this_module_only": concepts_taught,
-    "depends_on_concepts": depends_on,
-    "question_scope_for_later_checks": question_scope,
-    "module_description": module.get("description"),
-    "purpose": module.get("purpose") or module.get("module_metadata", {}).get("purpose"),
-    "why_it_matters_for_goal": module.get("why_it_matters_for_goal") or module.get("module_metadata", {}).get("why_it_matters_for_goal"),
-    "must_teach": module.get("must_teach") or module.get("module_metadata", {}).get("must_teach") or [],
-    "examples_to_include": module.get("examples_to_include") or module.get("module_metadata", {}).get("examples_to_include") or [],
-    "practice_type": module.get("practice_type") or module.get("module_metadata", {}).get("practice_type"),
-    "prerequisites": module.get("prerequisites"),
-    "why_now": module.get("why_now") or module.get("module_metadata", {}).get("why_now"),
-    "this_module_will_not_cover": not_cover,
-    "lesson_requirements": lesson_requirements,
-    "practice_requirements": practice_requirements,
-}, default=str)}
-
-Adaptation context:
-{json.dumps(adaptation_context, default=str)}
-
-ACTION REQUIRED — apply ALL teaching adjustments listed in recommended_teaching_adjustments.
-{chr(10).join(adaptation_context.get("recommended_teaching_adjustments") or []) or "No specific adjustments."}
-If adaptation_summary contains weak_concepts, add a brief recap of those before the main explanation.
-If adaptation_summary contains example_preference=more, include an extra worked example.
-If adaptation_summary contains pace_adjustment=slower, use smaller steps and more line-by-line explanation.
-If doubt_concepts is non-empty, pre-emptively address each of those concepts with extra clarity.
-If recent_doubt_messages is non-empty, those are questions the student actually asked — answer them inline within the relevant section of this lesson.
-
-Retrieved context:
-{chr(10).join(context_chunks[:4])}
-
-Required teaching flow:
-1. Mentor-style opening / hook that gives the learner one clear reason to care.
-2. What you will be able to do by the end.
-3. Mental model: explain the core idea in plain language before details.
-4. Step-by-step explanation in prerequisite order.
-5. Worked example / demonstration that actually performs the concept.
-6. Line-by-line explanation if code, math, formulas, or structured evidence appears.
-7. Common beginner mistake and how to avoid it.
-8. Mini practice task.
-9. Expected output, expected answer, or solution sketch for that task.
-10. Short recap.
-
-Required concept coverage:
-{concept_coverage_requirements}
-
-Rules:
-- Teach only Concepts taught in this module, explicitly listed dependencies, and tiny recaps of previous modules.
-- Teach the concrete content listed in the internal must_teach and lesson_requirements metadata.
-- Do not count a shared umbrella word as coverage. For example, teaching only "for loops" does not cover "while loops".
-- Do not introduce concepts outside question_scope_for_later_checks except as a clearly labeled one-sentence preview.
-- Never use excluded/delayed topics from "This module will not cover" as examples, exercises, or questions.
-- Include examples appropriate to the course topic and target context.
-- For programming or coding courses, include concrete runnable code blocks,
-  expected output, a line-by-line explanation, an output prediction moment,
-  and one small modification task. A programming lesson without code is incomplete.
-- For math, physics, chemistry, or science courses, include intuition, formula
-  meaning, concrete quantities, a worked example, a common mistake, and a practice problem.
-- For history, humanities, or social science courses, include context, cause-effect flow,
-  timeline or actors when relevant, evidence/examples, and a misconception to avoid.
-- Treat Retrieved context as optional evidence. Ignore any retrieved chunk that conflicts with this module boundary.
-- Do not include "Any doubts?" or interruptive chat prompts.
-- Any in-lesson check questions must be answerable from this lesson alone.
-- The backend generates the saved check-question objects separately after this lesson exists;
-  do not emit JSON or metadata for those questions inside the lesson.
-- Avoid out-of-syllabus terms unless you define them in the lesson first.
-- Make the lesson feel like a real course page, not a tiny note.
-- Do not write a generic template where the example says only "identify,
-  apply, interpret"; the worked example must actually perform the concept.
-- Do not use student-facing headings named "Must Teach", "Lesson Requirements",
-  "Concepts Taught in this Module", "Practice Requirements", "Question Scope",
-  "Module Goal", or "Why It Matters for Goal".
-- Use markdown headings, but choose natural learner-facing headings.
-
-Pace-specific requirements:
-{pace_requirements}
-"""
+    lesson_validation = validate_lesson_quality(content, course, module, context_chunks)
+    if not lesson_validation["passed"]:
+        try:
+            content = await generate(
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        lesson_prompt(course, module, context_chunks, adaptation_context, previous_modules)
+                        + "\n\nPrevious lesson failed validation:\n"
+                        + "\n".join("- " + issue for issue in lesson_validation["issues"])
+                        + "\nRegenerate a corrected lesson."
+                    ),
+                }],
+                model=settings.generation_model,
+                system="You are EduMind's expert course writer. Return corrected markdown only.",
+                _prompt_name=_lesson_prompt_meta.name,
+                _prompt_version=_lesson_prompt_meta.version,
+            )
+            lesson_validation = validate_lesson_quality(content, course, module, context_chunks)
+        except Exception as exc:
+            logger.warning("Lesson validation retry failed for '{}': {}", module["concept"], exc)
+    if not lesson_validation["passed"]:
+        # Never block delivery — student always gets content.
+        # Validation issues are signals for improvement on retry, not reasons to crash.
+        logger.warning(
+            "Lesson for \'{}\' has quality issues (delivering best attempt): {}",
+            module.get("concept"), "; ".join(lesson_validation["issues"])
+        )
+    return content
 
 
 async def generate_module_lesson(
@@ -1770,13 +1675,8 @@ async def _generate_module_lesson_impl(
     #     context_chunks = []                                  # V2
 
     try:
-        content = await generate(
-            messages=[{
-                "role": "user",
-                "content": lesson_prompt(course, module, context_chunks, adaptation_context, previous_modules),
-            }],
-            model=settings.generation_model,
-            system="You are EduMind's expert course writer. Return markdown only.",
+        content = await generate_lesson_content(
+            course, module, adaptation_context, previous_modules, context_chunks
         )
     except Exception as exc:
         logger.warning("Lesson generation failed for '{}': {}", module["concept"], exc)
@@ -1785,33 +1685,6 @@ async def _generate_module_lesson_impl(
             "message": "The AI model is temporarily unavailable. Please retry.",
             "lesson": None
         }
-
-    lesson_validation = validate_lesson_quality(content, course, module, context_chunks)
-    if not lesson_validation["passed"]:
-        try:
-            content = await generate(
-                messages=[{
-	                    "role": "user",
-	                    "content": (
-	                        lesson_prompt(course, module, context_chunks, adaptation_context, previous_modules)
-	                        + "\n\nPrevious lesson failed validation:\n"
-	                        + "\n".join("- " + issue for issue in lesson_validation["issues"])
-	                        + "\nRegenerate a corrected lesson."
-	                    ),
-                }],
-                model=settings.generation_model,
-                system="You are EduMind's expert course writer. Return corrected markdown only.",
-            )
-            lesson_validation = validate_lesson_quality(content, course, module, context_chunks)
-        except Exception as exc:
-            logger.warning("Lesson validation retry failed for '{}': {}", module["concept"], exc)
-    if not lesson_validation["passed"]:
-        # Never block delivery — student always gets content.
-        # Validation issues are signals for improvement on retry, not reasons to crash.
-        logger.warning(
-            "Lesson for \'{}\' has quality issues (delivering best attempt): {}",
-            module.get("concept"), "; ".join(lesson_validation["issues"])
-        )
 
     videos = await _optional_youtube_videos_for_module(course, module)
     await save_module_content(course_id, module_id, content, [], videos=videos)
@@ -2043,19 +1916,7 @@ async def _answer_doubt_with_web_search(
         f"Course: {course.get('topic')} | Module concept: {module.get('concept')} "
         f"| Pace: {course.get('pace', 'medium')}"
     )
-    system = (
-        "You are EduMind's module chat assistant. Answer the student's doubt clearly "
-        "and stay grounded in the current module content below.\n\n"
-        "You have web-search tools. Use them ONLY when the student's question involves "
-        "a concept you do not recognize, or needs current/external detail the module "
-        "does not cover. In that case call smoke_search first to orient, then "
-        "research_web to fetch grounded sources, then answer. If the module already "
-        "answers the question, do NOT search — just answer.\n"
-        "Always finish by calling the `answer` tool with your final reply. Label any "
-        'content beyond the module as "extra context". Do not invent facts.\n\n'
-        f'MODULE CONTENT:\n"""\n{context[:6000]}\n"""\n\n'
-        f"RECENT CHAT:\n{json.dumps(history[-6:], default=str)}"
-    )
+    system = module_chat_web_search_system(context, history)
     tools = mcp_search_client.groq_tools() + [
         {
             "type": "function",
@@ -2118,6 +1979,34 @@ def _append_source_citations(reply: str, sources: list[dict], limit: int = 4) ->
     return reply + "\n\n**Sources:**\n" + "\n".join(lines)
 
 
+def module_chat_web_search_system(context: str, history: list[dict[str, Any]]) -> str:
+    """Build the system prompt for the web-search-enabled module chat tool loop."""
+    return get_prompt("module_chat_web_search_system").render(
+        module_content=context[:6000],
+        recent_chat=json.dumps(history[-6:], default=str),
+    )
+
+
+def module_chat_prompt(
+    course: dict[str, Any],
+    module: dict[str, Any],
+    dtype: str,
+    message: str,
+    context: str,
+    history: list[dict[str, Any]],
+) -> str:
+    """Build the grounded module-chat (doubt) prompt from module content and chat."""
+    return get_prompt("module_chat_grounded").render(
+        course_topic=course.get('topic'),
+        module_title=module.get('title'),
+        module_concept=module.get('concept'),
+        dtype=dtype,
+        message=message,
+        module_content=context[:6000],
+        recent_chat=json.dumps(history[-6:], default=str),
+    )
+
+
 async def answer_module_chat(
     course_id: str,
     module_id: str,
@@ -2152,29 +2041,14 @@ async def answer_module_chat(
 
     if reply is None:
         # Default grounded path (unchanged): answer from the saved module only.
-        prompt = f"""A student asked a doubt in the side chat.
-
-Course: {course.get('topic')}
-Module: {module.get('title')} / {module.get('concept')}
-Doubt type: {dtype}
-Student message: {message}
-
-Current module content is the primary source:
-\"\"\"
-{context[:6000]}
-\"\"\"
-
-Recent chat:
-{json.dumps(history[-6:], default=str)}
-
-Answer simply and clearly. Stay grounded in the current module. If you add
-anything beyond the module, label it as "extra context". Do not invent facts.
-"""
+        prompt = module_chat_prompt(course, module, dtype, message, context, history)
         try:
             reply = await generate(
                 messages=[{"role": "user", "content": prompt}],
                 model=settings.generation_model,
-                system="You are EduMind's module chat assistant.",
+                system=get_prompt("module_chat_system").render(),
+                _prompt_name="module_chat_grounded",
+                _prompt_version=get_prompt("module_chat_grounded").version,
             )
         except Exception as exc:
             logger.warning("Module chat generation failed: {}", exc)

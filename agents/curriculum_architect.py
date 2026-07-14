@@ -60,6 +60,8 @@ from core.student_model import (
     StudentState,
 )
 from db.postgres import get_conn
+from prompts import get_prompt
+from prompts.curriculum import sequencer_pace_hint
 
 
 def _empty_research(topic: str) -> ResearchSummary:
@@ -174,79 +176,8 @@ class CurriculumArchitectAgent(BaseAgent):
         """
         student_ctx = _build_student_context_block(topic, profile)
 
-        system = """You are EduMind's curriculum coverage planner.
-Your ONLY job: produce a GRANULAR flat list of every individual concept a student must learn,
-personalised to the student's context below.
-
-Return STRICT JSON only. No markdown.
-
-{
-  "concepts": [
-    {
-      "name": "exact concept name — one specific teachable unit",
-      "cluster": "thematic group",
-      "importance": "essential | important | supplementary",
-      "why_needed": "one sentence"
-    }
-  ],
-  "coverage_rationale": "brief explanation of why this set covers the goal",
-  "total_concepts": 0
-}
-
-CRITICAL RULES:
-
-1. PERSONALISATION IS MANDATORY.
-   - Read the student context carefully. The goal and target context define WHAT version
-     of the subject to teach. Two students learning "matrices" for different goals need
-     completely different curricula.
-   - If known_concepts lists things the student already knows, SKIP those concepts
-     unless they are strict prerequisites for what comes next. Do not re-teach them.
-   - If weak_concepts lists things the student struggles with, ADD extra foundational
-     and bridging concepts around those areas.
-   - do_not_include is ABSOLUTE. If a concept appears in that list, or is a subtopic
-     of anything in that list, exclude it entirely.
-
-2. GRANULARITY IS MANDATORY. Each entry must be ONE teachable concept.
-   BAD: "OOP" (too broad — cluster, not a concept)
-   BAD: "Data Structures" (too broad)
-   GOOD: "Classes and Objects", "Inheritance", "Polymorphism", "Encapsulation"
-   GOOD: "Lists", "Tuples", "Dictionaries", "Sets" (each is its own concept)
-
-3. USE YOUR FULL SUBJECT KNOWLEDGE. Be exhaustive for the stated goal and level.
-   The student is counting on you not to miss anything they need.
-
-GRANULARITY EXAMPLES BY SUBJECT:
-
-Python programming (pure/beginner to developer) — each is a SEPARATE entry:
-  Variables and Assignment, Integer Type, Float Type, String Type, Boolean Type, None Type,
-  Arithmetic Operators, Comparison Operators, Logical Operators, Assignment Operators,
-  Bitwise Operators, String Indexing and Slicing, String Methods, f-Strings and Formatting,
-  print() and input(), if Statement, elif and else, Nested Conditionals,
-  for Loops, while Loops, break and continue, range(),
-  Functions: Definition and Calling, Function Parameters and Arguments, Return Values,
-  Default and Keyword Arguments, *args and **kwargs, Scope and Namespaces,
-  Lists: Creation and Indexing, List Methods, Tuples, Dictionaries, Dictionary Methods,
-  Sets, List Comprehensions, Dictionary Comprehensions, Set Comprehensions,
-  Lambda Functions, map() filter() reduce(), Exception Handling: try/except/finally,
-  Raising Exceptions, Custom Exceptions, File Reading, File Writing, Context Managers,
-  Modules: import and from-import, Creating Modules, Standard Library Overview,
-  Classes and Objects, __init__ and Instance Variables, Instance Methods,
-  Inheritance and super(), Method Overriding, Polymorphism, Encapsulation,
-  Class Methods and Static Methods, Properties and Getters/Setters,
-  Dunder/Magic Methods, Abstract Classes, Iterators and Generators,
-  Decorators, Testing with unittest, Debugging Techniques, Virtual Environments and pip,
-  Type Hints, Practical Project
-
-Physics thermodynamics — each separate:
-  Temperature and Measurement, Thermal Expansion, Heat Transfer Mechanisms,
-  Zeroth Law and Thermal Equilibrium, Internal Energy, Heat vs Work,
-  First Law of Thermodynamics, Specific Heat Capacity, Latent Heat,
-  Isothermal Processes, Adiabatic Processes, Isobaric Processes, Isochoric Processes,
-  PV Diagrams, Second Law: Entropy, Carnot Cycle, Heat Engines Efficiency,
-  Refrigerators and Heat Pumps, Kinetic Theory of Gases, Ideal Gas Law,
-  Maxwell-Boltzmann Distribution, Real Gases and Deviations, Third Law
-
-Apply this SAME level of granularity to any subject."""
+        _coverage_prompt = get_prompt("curriculum_coverage_planner_system")
+        system = _coverage_prompt.render()
 
         payload = {
             "student_context": student_ctx,
@@ -264,6 +195,9 @@ Apply this SAME level of granularity to any subject."""
             system=system,
             json_mode=True,
             max_tokens=4000,
+            _caller="curriculum_architect",
+            _prompt_name=_coverage_prompt.name,
+            _prompt_version=_coverage_prompt.version,
         )
         data = parse_json_object(raw)
         concepts = data.get("concepts") or []
@@ -294,80 +228,10 @@ Apply this SAME level of granularity to any subject."""
         pace = str(profile.get("pace") or self.state.pace or "medium").strip()
 
         # Pace-aware grouping rules injected into the system prompt.
-        pace_hint = {
-            "fast": (
-                "FAST PACE — Aggressively merge related small concepts into one module.\n"
-                "   - All operator types → one module: 'Python Operators'\n"
-                "   - All primitive types → one module: 'Python Data Types'\n"
-                "   - String indexing + slicing + methods → one module\n"
-                "   - All comprehensions → one module\n"
-                "   - All OOP except Classes+Objects can share 1-2 modules\n"
-                "   Target: 20-30 modules total for a full language curriculum."
-            ),
-            "medium": (
-                "MEDIUM PACE — Group by natural thematic cluster. Each module = one coherent topic.\n"
-                "   - Arithmetic + comparison + logical + assignment operators → ONE 'Operators' module\n"
-                "     (they are all operators, learned together, same lesson)\n"
-                "   - Membership + identity operators → can join the operators module\n"
-                "   - Primitive types (int, float, bool, None) → can be ONE 'Numeric & Boolean Types' module\n"
-                "   - String type + string basics → own module; string methods → own module\n"
-                "   - if/elif/else → own module; for/while loops → own module\n"
-                "   - Each data structure (list, tuple, dict, set) → own module\n"
-                "   - Each major OOP concept → own module\n"
-                "   Target: 30-45 modules total for a full language curriculum."
-            ),
-            "deep": (
-                "DEEP PACE — One concept per module. Maximum granularity.\n"
-                "   - Every operator TYPE gets its own module (arithmetic, comparison, logical, etc.)\n"
-                "   - Every data type gets its own module\n"
-                "   - Every OOP concept gets its own module\n"
-                "   - Err on the side of splitting, never merging\n"
-                "   Target: 50-70 modules total for a full language curriculum."
-            ),
-        }.get(pace, "Group concepts by natural thematic clusters. Each module = one coherent topic.")
+        pace_hint = sequencer_pace_hint(pace)
 
-        system = f"""You are EduMind's curriculum sequencer. You receive a flat concept list.
-Your job: arrange ALL concepts into an ordered module list following the PACE RULES below.
-
-Return STRICT JSON only. No markdown.
-
-{{
-  "modules": [
-    {{
-      "id": "m1",
-      "title": "clear descriptive title",
-      "concept": "primary concept name",
-      "concepts_taught": ["concept1", "concept2"],
-      "prerequisites": ["concept name from earlier module only"],
-      "estimated_minutes": 30,
-      "depth_level": "surface | standard | deep",
-      "why_now": "one sentence",
-      "roadmap_step_id": "step_01"
-    }}
-  ],
-  "rationale": "brief explanation",
-  "confidence": 0.0
-}}
-
-━━━ PACE RULES (HIGHEST PRIORITY) ━━━
-{pace_hint}
-
-━━━ UNIVERSAL RULES ━━━
-
-1. NEVER DROP CONCEPTS. Every concept in the input list must appear in concepts_taught
-   of exactly one module. Count before submitting. Set confidence=0.0 if any are missing.
-
-2. ORDER: strict prerequisite order. No concept appears before its dependencies.
-   Setup/install → types → operators → control flow → functions → data structures
-   → comprehensions → exceptions → files → modules → OOP → advanced topics → project.
-
-3. depth_level: based on concept complexity relative to student level.
-   "surface"=introductory, "standard"=core, "deep"=advanced. Never based on pace.
-
-4. prerequisites[]: concept names from earlier modules only. Never module IDs.
-
-5. PERSONALISATION: If the student has weak concepts, give those modules more
-   estimated_minutes and depth_level="deep"."""
+        _sequencer_prompt = get_prompt("curriculum_sequencer_system")
+        system = _sequencer_prompt.render(pace_hint=pace_hint)
 
         # Strip extra fields before sending — sequencer only needs concept names.
         # Full dicts (cluster, importance, why_needed) add ~1,350 tokens of noise
@@ -394,6 +258,9 @@ Return STRICT JSON only. No markdown.
             system=system,
             json_mode=True,
             max_tokens=6000,
+            _caller="curriculum_architect",
+            _prompt_name=_sequencer_prompt.name,
+            _prompt_version=_sequencer_prompt.version,
         )
         data = parse_json_object(raw)
         modules = data.get("modules") or []
@@ -428,33 +295,8 @@ Return STRICT JSON only. No markdown.
         """
         student_ctx = _build_student_context_block(topic, profile)
 
-        system = """You are EduMind's curriculum auditor. You perform TWO checks:
-
-CHECK 1 — COVERAGE: Find concepts genuinely missing from the module list.
-CHECK 2 — STRUCTURE: Find structural problems in the roadmap.
-
-Return STRICT JSON only.
-{
-  "concepts_missing_from_modules": ["missing concept 1", ...],
-  "structural_issues": ["issue description", ...],
-  "coverage_verdict": "complete | minor_gaps | major_gaps",
-  "verdict_reason": "one sentence"
-}
-
-CHECK 1 RULES:
-- Only report concepts GENUINELY missing — not present in any module's concepts_taught.
-- Do NOT report concepts in do_not_include — those are intentionally excluded.
-- Do NOT report concepts the student already knows unless they are strict prerequisites.
-- Report as many missing concepts as needed — do NOT cap the list.
-- If complete, return empty list and verdict "complete".
-
-CHECK 2 RULES — flag these structural issues:
-- A module with 0 concepts_taught
-- OOP concepts (classes, inheritance, polymorphism, encapsulation) bundled into one module
-  when there are 4+ of them — each major OOP concept should be its own module on deep/medium pace
-- Prerequisites referencing concepts that appear LATER in the list (ordering violation)
-- Duplicate concept names across modules
-- If no structural issues found, return empty structural_issues list."""
+        _auditor_prompt = get_prompt("curriculum_auditor_system")
+        system = _auditor_prompt.render()
 
         module_titles = [
             {
@@ -480,6 +322,9 @@ CHECK 2 RULES — flag these structural issues:
                 system=system,
                 json_mode=True,
                 max_tokens=3000,
+                _caller="curriculum_architect",
+                _prompt_name=_auditor_prompt.name,
+                _prompt_version=_auditor_prompt.version,
             )
             audit = parse_json_object(raw)
             missing = audit.get("concepts_missing_from_modules") or []
@@ -870,9 +715,22 @@ Return STRICT JSON only: {"modules": [...], "repair_rationale": "..."}"""
         """
         Build, validate, repair, persist, and return a CurriculumPlan.
 
+        Thin wrapper: ``_build_plan`` runs the LLM + assembly pipeline (no DB),
+        then ``_persist_curriculum`` writes it. The split lets the golden-eval
+        runner exercise the exact live planning path via ``_build_plan`` without
+        touching the production database. Public behaviour is unchanged.
+        """
+        plan = await self._build_plan(topic, profile)
+        await self._persist_curriculum(plan)
+        return plan
+
+    async def _build_plan(self, topic: str, profile: dict[str, Any] | None = None) -> CurriculumPlan:
+        """
+        Build, validate, and repair a CurriculumPlan (no DB access).
+
         The planner uses a coverage-first LLM call, a sequencing LLM call,
         deterministic cleanup, validation, optional repair, and final typed
-        conversion before saving the curriculum for the student.
+        conversion. Persistence is handled separately by ``_persist_curriculum``.
         """
         pace = self.state.pace if self.state.pace in ("fast", "medium", "deep") else "medium"
         depth_level = {"fast": "surface", "medium": "standard", "deep": "deep"}[pace]
@@ -1134,6 +992,12 @@ Return STRICT JSON only: {"modules": [...], "repair_rationale": "..."}"""
             repair_history=repair_history,
             validation_result=validation,
         )
+        return plan
+
+    async def _persist_curriculum(self, plan: CurriculumPlan) -> CurriculumPlan:
+        """Persist a built CurriculumPlan to the DB and update student state."""
+        modules = plan.modules
+        confidence = float((plan.validation_result or {}).get("confidence") or 0.0)
 
         _curriculum_pace = str(getattr(self.state, "pace", None) or "medium")
         async with get_conn() as conn:

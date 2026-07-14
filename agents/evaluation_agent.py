@@ -28,6 +28,7 @@ from core.metrics import metrics as _metrics
 from clients.groq_client import generate
 from config import settings
 from core.curriculum_quality import parse_json_object
+from prompts import get_prompt
 from db.postgres import (
     get_adaptation_summary,
     get_compact_doubt_summary,
@@ -48,11 +49,10 @@ DECISION_ENUM = {
     "ADJUST_FUTURE_LESSON_DIFFICULTY",
 }
 
-_EVAL_SYSTEM = (
-    "You are EduMind's evaluation agent. Return STRICT JSON only. No markdown. "
-    "Your job: assess the student's understanding fairly and help them improve. "
-    "Be specific, honest, encouraging. Never invent facts outside the lesson content provided."
-)
+# Registry-backed (prompts/evaluation.py). Rendered once at import; the string is
+# identical to the former inline literal (snapshot-proven).
+_EVAL_SYSTEM_PROMPT = get_prompt("evaluation_system")
+_EVAL_SYSTEM = _EVAL_SYSTEM_PROMPT.render()
 
 # Per-pace config
 # fast:   2 base questions + up to 1 chained probe = max 3 total
@@ -134,15 +134,7 @@ async def _generate_probe_question(
             "suspicious_parts": suspicious_parts,
         },
         "probe_number": probe_number,
-        "instructions": (
-            "Generate ONE targeted follow-up question that probes EXACTLY the gap detected. "
-            "Like a skilled interviewer: you noticed something the student doesn't fully understand — "
-            "ask them to explain that specific thing. "
-            "The question must be answerable from the lesson content only. "
-            "Do NOT repeat the previous question. "
-            "Do NOT ask a broad question — narrow down to the exact weak spot. "
-            "Return JSON only."
-        ),
+        "instructions": get_prompt("evaluation_probe_instructions").render(),
         "return_schema": {
             "id": f"probe_{probe_number}",
             "question_text": "...",
@@ -159,6 +151,9 @@ async def _generate_probe_question(
             model=getattr(settings, "adaptation_model", settings.reasoning_model),
             system=_EVAL_SYSTEM,
             json_mode=True,
+            _caller="evaluation",
+            _prompt_name="evaluation_probe_instructions",
+            _prompt_version=get_prompt("evaluation_probe_instructions").version,
         )
         data = parse_json_object(raw)
         if data.get("question_text"):
@@ -166,6 +161,68 @@ async def _generate_probe_question(
     except Exception as exc:
         logger.warning("Probe question generation failed: {}", exc)
     return None
+
+
+async def diagnose_student_answer(
+    mod_ctx: dict[str, Any],
+    lesson_content: str,
+    question: dict[str, Any],
+    answer_text: str,
+    confidence: int = 3,
+    previous_answers: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """
+    Diagnose one student answer against the lesson and question.
+
+    Thin seam extracted from ``_submit_answer_impl`` so the same live diagnosis
+    code path can be exercised without a DB-backed evaluation session (used by
+    the golden-eval runner). Behaviour is identical to the inline block it
+    replaced. Returns the parsed diagnosis dict, or a safe fallback on failure.
+    """
+    previous_answers = previous_answers or []
+    diagnosis_prompt = json.dumps({
+        "task": "diagnose_student_answer",
+        "module": mod_ctx,
+        "lesson_excerpt": _lesson_excerpt(lesson_content),
+        "question": question,
+        "student_answer": answer_text,
+        "confidence_stated": confidence,
+        "previous_answers": previous_answers[-3:],
+        "instructions": get_prompt("evaluation_diagnose_instructions").render(),
+        "return_schema": {
+            "correct_concepts": ["..."],
+            "weak_concepts": ["..."],
+            "missing_reasoning": "one sentence describing what reasoning was absent",
+            "vague_parts": "what was said vaguely",
+            "suspicious_parts": "what might indicate a misconception",
+            "confidence_score": 0.0,
+            "mastery_signal": "clear | uncertain | weak",
+            "evidence_from_answer": "a brief quote or paraphrase from student answer",
+            "probe_worthy": True,
+        },
+    }, default=str)
+
+    try:
+        raw = await generate(
+            messages=[{"role": "user", "content": diagnosis_prompt}],
+            model=getattr(settings, "adaptation_model", settings.reasoning_model),
+            system=_EVAL_SYSTEM,
+            json_mode=True,
+            _caller="evaluation",
+            _prompt_name="evaluation_diagnose_instructions",
+            _prompt_version=get_prompt("evaluation_diagnose_instructions").version,
+        )
+        return parse_json_object(raw)
+    except Exception as exc:
+        logger.warning("Answer diagnosis failed: {}", exc)
+        return {
+            "correct_concepts": [],
+            "weak_concepts": mod_ctx.get("concepts_taught", []),
+            "missing_reasoning": "Could not analyze answer.",
+            "mastery_signal": "uncertain",
+            "confidence_score": 0.5,
+            "probe_worthy": False,
+        }
 
 
 async def start_session(
@@ -278,6 +335,9 @@ async def _start_session_impl(
             model=getattr(settings, "adaptation_model", settings.reasoning_model),
             system=_EVAL_SYSTEM,
             json_mode=True,
+            _caller="evaluation",
+            _prompt_name=_EVAL_SYSTEM_PROMPT.name,
+            _prompt_version=_EVAL_SYSTEM_PROMPT.version,
         )
         data = parse_json_object(raw)
         questions = data.get("questions") or []
@@ -412,53 +472,14 @@ async def _submit_answer_impl(
     mod_ctx = _module_context(module or {})
 
     # --- Diagnose this answer ---
-    diagnosis_prompt = json.dumps({
-        "task": "diagnose_student_answer",
-        "module": mod_ctx,
-        "lesson_excerpt": _lesson_excerpt(lesson_content),
-        "question": question,
-        "student_answer": answer_text,
-        "confidence_stated": confidence,
-        "previous_answers": answers[-3:],
-        "instructions": (
-            "Diagnose the answer fairly. "
-            "Identify exactly what the student got right and what was weak, vague, or missing. "
-            "Be like a good interviewer: notice what they DON'T say, not just what they say wrong. "
-            "If the answer is vague on a concept, flag it in vague_parts. "
-            "If the answer shows a misconception, flag it in suspicious_parts. "
-            "Return JSON only."
-        ),
-        "return_schema": {
-            "correct_concepts": ["..."],
-            "weak_concepts": ["..."],
-            "missing_reasoning": "one sentence describing what reasoning was absent",
-            "vague_parts": "what was said vaguely",
-            "suspicious_parts": "what might indicate a misconception",
-            "confidence_score": 0.0,
-            "mastery_signal": "clear | uncertain | weak",
-            "evidence_from_answer": "a brief quote or paraphrase from student answer",
-            "probe_worthy": True,
-        },
-    }, default=str)
-
-    try:
-        raw = await generate(
-            messages=[{"role": "user", "content": diagnosis_prompt}],
-            model=getattr(settings, "adaptation_model", settings.reasoning_model),
-            system=_EVAL_SYSTEM,
-            json_mode=True,
-        )
-        diagnosis = parse_json_object(raw)
-    except Exception as exc:
-        logger.warning("Answer diagnosis failed: {}", exc)
-        diagnosis = {
-            "correct_concepts": [],
-            "weak_concepts": mod_ctx.get("concepts_taught", []),
-            "missing_reasoning": "Could not analyze answer.",
-            "mastery_signal": "uncertain",
-            "confidence_score": 0.5,
-            "probe_worthy": False,
-        }
+    diagnosis = await diagnose_student_answer(
+        mod_ctx=mod_ctx,
+        lesson_content=lesson_content,
+        question=question,
+        answer_text=answer_text,
+        confidence=confidence,
+        previous_answers=answers,
+    )
 
     answers.append({
         "question_id": question_id,
@@ -679,17 +700,7 @@ async def _finalize_impl(
             for a in answers
         ],
         "decision_options": list(DECISION_ENUM),
-        "instructions": (
-            "Generate the final evaluation report. "
-            "motivational_feedback: 2-3 sentences. Be honest and SPECIFIC — mention actual things the student got right AND what was weak. "
-            "No generic praise. No demotivating language. "
-            "If probe questions were asked, explain what gap was found and whether the student clarified it. "
-            "transition_feedback: 1-2 sentences for the NEXT module — what will be adjusted and why. "
-            "decision: one of the five options — use the computed mastery score and threshold to guide this. "
-            "reteach_data: only populate if decision is RETEACH_WEAK_CONCEPTS or REPEAT_MODULE. "
-            "adaptation_summary: max 3 bullet points for future lesson generation. "
-            "Return JSON only."
-        ),
+        "instructions": get_prompt("evaluation_finalize_instructions").render(),
         "return_schema": {
             "strengths": ["..."],
             "weak_concepts": ["..."],
@@ -724,6 +735,9 @@ async def _finalize_impl(
             model=getattr(settings, "adaptation_model", settings.reasoning_model),
             system=_EVAL_SYSTEM,
             json_mode=True,
+            _caller="evaluation",
+            _prompt_name="evaluation_finalize_instructions",
+            _prompt_version=get_prompt("evaluation_finalize_instructions").version,
         )
         report_data = parse_json_object(raw)
     except Exception as exc:

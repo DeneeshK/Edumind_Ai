@@ -33,6 +33,8 @@ from core.tracing import (
     GEN_AI_USAGE_OUTPUT_TOKENS,
     GEN_AI_USAGE_COST_USD,
     GEN_AI_USAGE_IS_ESTIMATE,
+    GEN_AI_PROMPT_NAME,
+    GEN_AI_PROMPT_VERSION,
     EDUMIND_CALLER,
 )
 
@@ -261,6 +263,8 @@ async def generate(
     json_mode: bool = False,
     max_tokens: int | None = None,
     _caller: str = "unknown",
+    _prompt_name: str | None = None,
+    _prompt_version: int | None = None,
 ) -> str:
     """
     Single completion. Returns the assistant's text response.
@@ -272,6 +276,10 @@ async def generate(
         json_mode:  if True, sets response_format={"type":"json_object"}
         max_tokens: optional output token cap
         _caller:    label for metrics (e.g. "curriculum_architect", "tutor", "evaluation")
+        _prompt_name:    optional registry prompt name (prompts/) driving this call.
+                         Attached as the gen_ai.prompt.name span attribute for
+                         traceability. None (default) → attribute omitted, no behaviour change.
+        _prompt_version: optional registry prompt version, paired with _prompt_name.
     """
     import time as _time
     from core.metrics import metrics as _m
@@ -303,6 +311,10 @@ async def generate(
     # parents correctly under the caller's span across the thread hop.
     with get_tracer().start_as_current_span("groq.generate") as span:
         _annotate_llm_span(span, model, _caller, 0, 0, None)
+        if _prompt_name is not None and span.is_recording():
+            span.set_attribute(GEN_AI_PROMPT_NAME, _prompt_name)
+            if _prompt_version is not None:
+                span.set_attribute(GEN_AI_PROMPT_VERSION, int(_prompt_version))
         try:
             response = await _with_retry(_call)
             _m.llm_latency.labels(model=model).observe(_time.perf_counter() - _start)

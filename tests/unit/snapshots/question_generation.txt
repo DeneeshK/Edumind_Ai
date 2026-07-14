@@ -1,0 +1,64 @@
+Return STRICT JSON only. No markdown.
+
+Create grounded check questions for this lesson.
+
+Generate questions only from explicit facts/concepts present in the lesson content. Do not ask questions about anything not directly taught in the lesson. Do not use placeholder/meta-question phrasing such as 'According to the lesson', 'What is the key idea', or 'What detail from the lesson explains'.
+
+Course: Python programming
+Goal: Build web apps with FastAPI
+Module title: Functions
+Module concept: Functions
+Allowed concepts_tested: ["Functions", "Parameters"]
+Target question count: 3
+
+Previous validation issues:
+["Question 2 not grounded in lesson text."]
+
+Lesson content:
+"""
+# Functions
+
+A function is a reusable block of code. You define it with `def`.
+Parameters let you pass data in; `return` sends a value back.
+
+```python
+def add(a, b):
+    return a + b
+```
+
+"""
+
+Return this exact JSON shape:
+{
+  "questions": [
+    {
+      "question_text": "...",
+      "expected_answer": "Use a short phrase or sentence copied exactly from the lesson.",
+      "source_quote": "Copy one exact contiguous quote from the lesson that supports the answer.",
+      "concepts_tested": ["one allowed concept"],
+      "source_section": "Lesson",
+      "is_answerable_from_lesson": true,
+      "difficulty": "simple"
+    }
+  ]
+}
+
+Rules:
+- source_quote must be copied verbatim from the lesson content.
+- expected_answer must either be copied verbatim from the lesson or be fully supported by source_quote.
+- concepts_tested must use only Allowed concepts_tested.
+- Allowed concepts_tested has already been filtered to concepts explicitly present in the lesson.
+- Do not mention or test a module concept that is absent from the lesson text.
+- Do not use external knowledge, retrieved context, or future-course concepts.
+- Ban placeholder/meta-question patterns:
+  "According to the lesson...", "What is the key idea about...",
+  "What detail from the lesson explains...", and generic "Why does X matter?"
+- Questions should test understanding, application, prediction, common mistake recognition,
+  or explanation in the learner's own words.
+- For coding lessons, prefer concrete prompts such as output prediction, what a line does,
+  what command to run, what small code change to make, or what beginner mistake causes failure.
+- For math/science lessons, ask what a variable represents, which formula/idea applies,
+  what changes the result, or which common mistake breaks the reasoning.
+- For humanities lessons, ask about causes, consequences, actors, sequence, evidence,
+  or what changed after the event/decision.
+- If you cannot produce enough grounded questions, return fewer questions.

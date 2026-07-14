@@ -1,0 +1,26 @@
+A student asked a doubt in the side chat.
+
+Course: Python programming
+Module: Functions / Functions
+Doubt type: conceptual
+Student message: I don't understand how return is different from print.
+
+Current module content is the primary source:
+"""
+# Functions
+
+A function is a reusable block of code. You define it with `def`.
+Parameters let you pass data in; `return` sends a value back.
+
+```python
+def add(a, b):
+    return a + b
+```
+
+"""
+
+Recent chat:
+[{"role": "user", "content": "What is a parameter?"}, {"role": "assistant", "content": "A parameter is an input to a function."}]
+
+Answer simply and clearly. Stay grounded in the current module. If you add
+anything beyond the module, label it as "extra context". Do not invent facts.
