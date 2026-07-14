@@ -32,7 +32,23 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full breakdown.
 - PostgreSQL repository and schema bootstrap: `db/postgres.py`
 - External LLM/search clients: `clients/`
 - Evaluation metrics and report generation: `evaluation/`
+- Versioned prompt registry: `prompts/` (live-flow prompts as tracked artifacts)
+- Golden prompt-regression suite: `evaluation/golden/`
 - Docker Compose runtime: `docker-compose.yml`
+
+## Prompt registry and golden evals
+
+The prompts that drive the live curriculum, lesson, and evaluation flows are
+versioned artifacts in `prompts/` rather than inline strings — each has a name, an
+integer version, and a `render()` that fails loudly on missing placeholders.
+Snapshot tests prove the extraction is render-identical, and a golden evaluation
+suite (`evaluation/golden/`) runs representative curriculum, diagnosis, and lesson
+cases through the real production code paths and reuses the existing LLM judges to
+catch prompt regressions — a prompt edit that degrades curriculum quality or answer
+diagnosis (including a standing prompt-injection case) fails a CI check before it
+ships. Run it locally with `python -m evaluation.golden.run_golden --suite all`
+(needs a real `GROQ_API_KEY`). See [Architecture](docs/ARCHITECTURE.md) →
+"Prompt management and golden evals".
 
 ## Current Production Shape
 

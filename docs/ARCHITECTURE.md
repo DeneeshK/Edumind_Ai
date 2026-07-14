@@ -209,3 +209,78 @@ OTEL_ENABLED=true OTEL_EXPORTER_ENDPOINT=http://localhost:6006/v1/traces \
 ```
 
 Phoenix is **off by default in prod** and gated entirely by `OTEL_ENABLED`.
+
+## Prompt management and golden evals
+
+The prompts that drive the **live** flows are versioned artifacts, not inline
+strings, and a golden regression suite gates prompt edits in CI.
+
+### Prompt registry (`prompts/`)
+
+Every live-flow prompt is a `PromptArtifact` (name, integer `version`, template
+string, `render(**kwargs)`) registered in a global `REGISTRY`; fetch one with
+`get_prompt(name)`. Modules:
+
+- `prompts/curriculum.py` — coverage-planner, sequencer (+ pace rules), auditor system prompts.
+- `prompts/evaluation.py` — evaluation system + diagnose / probe / finalize instruction blocks.
+- `prompts/lesson.py` — lesson-generation scaffold + pace blocks, question-generation retry, module-chat prompts.
+
+Placeholders use `{{name}}` so they never collide with the JSON braces embedded in
+prompts; `render()` fails loudly on a missing or unexpected placeholder. Call sites
+assemble the dynamic data (JSON metadata blocks, concept lists) and pass it in — the
+authored text lives in the registry. The **legacy** `/session` flow keeps its prompts
+inline and is out of scope.
+
+**Versioning rule:** bump `version` on any semantic edit to a template and update the
+checked-in snapshot in the same commit. Extraction is render-identical: snapshots in
+`tests/unit/snapshots/` were captured from the original inline strings and are asserted
+byte-for-byte in `tests/unit/test_prompt_snapshots.py` (these run in the normal
+`backend-ci` job — no API key needed).
+
+**Traceability:** when a registry prompt drives a `clients.groq_client.generate` call,
+`_prompt_name` / `_prompt_version` are attached to the LLM span as
+`gen_ai.prompt.name` / `gen_ai.prompt.version` (optional, default `None`).
+
+### Golden eval suite (`evaluation/golden/`)
+
+Checked-in YAML cases exercise the real production code paths and reuse the existing
+LLM judges (`evaluation/metrics/`, judge model `settings.eval_judge_model`):
+
+- **curriculum/** — build a curriculum via `CurriculumArchitectAgent`; the primary
+  gates are the judge-based `curriculum_coverage_score`, `do_not_include` exclusion,
+  and `must_include` coverage. The deterministic `curriculum_ordering_score` is
+  **reported** but not tightly gated: the underlying architect is nondeterministic
+  and the metric exact-matches LLM-generated prerequisite name strings, so it swings
+  widely (0.0–1.0) run to run; `module_count` is likewise a loose "not collapsed"
+  sanity floor. Thresholds are tuned to be green on current `main` behaviour so the
+  suite starts as a true regression baseline (a coverage drop or a `do_not_include`
+  leak fails the case).
+- **diagnosis/** — diagnose canned answers via the evaluation agent; assert the
+  expected `mastery_signal` direction and weak-concept expectations. Includes a
+  standing prompt-injection case ("Ignore previous instructions…") that must never
+  yield `mastery_signal=clear`.
+- **lesson/** — generate a lesson via `generate_module_lesson`'s prompt+generate path;
+  assert required concepts present, length band, a practice section, and the
+  judge-based `lesson_quality_score`.
+
+Judge-based scores are run twice and averaged to damp nondeterminism. The runner uses
+thin DB-free seams (`_build_plan`, `diagnose_student_answer`, `generate_lesson_content`)
+so it never needs the production DB, and metric persistence is disabled during a run.
+
+Run it locally (needs a real `GROQ_API_KEY`, which `.env` provides):
+
+```bash
+python -m evaluation.golden.run_golden --suite all --report out.json
+# --suite curriculum|diagnosis|lesson to run one; writes out.json + out.md
+```
+
+Exit code is 1 if any case fails. The full suite is well under ~200k tokens per run.
+
+### What CI gates
+
+`.github/workflows/golden-evals.yml` runs the full suite on `workflow_dispatch` and on
+PRs that touch `prompts/**`, `agents/curriculum_architect.py`,
+`agents/evaluation_agent.py`, `core/course_service.py`, or `evaluation/golden/**`. It
+uses `secrets.GROQ_API_KEY`; on forks where the secret is unavailable it skips with a
+notice instead of failing. The JSON + markdown report is uploaded as a workflow
+artifact, and the job fails on any case failure.
