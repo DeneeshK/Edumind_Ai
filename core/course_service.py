@@ -1831,6 +1831,7 @@ async def generate_module_lesson_events(
 	            }],
             model=settings.generation_model,
             system="You are EduMind's expert course writer. Return markdown only.",
+            _caller="lesson_stream",
         ):
             chunks.append(chunk)
         content = "".join(chunks).strip()
@@ -2032,6 +2033,7 @@ async def _answer_doubt_with_web_search(
             terminal_tool_name="answer",
             model=settings.generation_model,
             tool_executor=executor,
+            _caller="doubt_web_search",
         )
         reply = (result or {}).get("reply")
         if not (isinstance(reply, str) and reply.strip()):

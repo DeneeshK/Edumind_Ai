@@ -24,7 +24,7 @@ from groq import Groq
 from groq import RateLimitError, APITimeoutError
 from loguru import logger
 
-from config import settings
+from config import settings, compute_llm_cost_usd
 
 
 # ── Custom exceptions ─────────────────────────────────────────────────────────
@@ -105,6 +105,64 @@ def _recover_tool_call_from_text(text: str) -> tuple[str, dict | list] | None:
     name = xml_match.group("name")
     args = _parse_tool_args(xml_match.group("args"))
     return name, args
+
+
+# ── Token + cost accounting ───────────────────────────────────────────────────
+
+def _record_usage(
+    model: str,
+    caller: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    *,
+    estimated: bool = False,
+) -> float | None:
+    """Record token counts (and cost when priced) to Prometheus.
+
+    Increments edumind_llm_tokens_total for both directions and, when the model
+    has a non-zero price in config.GROQ_MODEL_PRICES, edumind_llm_cost_usd_total.
+    Returns the estimated USD cost (or None if the model is unpriced) so the
+    caller can also attach it as a span attribute. Never raises — metrics must
+    not break an LLM call.
+    """
+    from core.metrics import metrics as _m
+
+    try:
+        if prompt_tokens:
+            _m.llm_tokens.labels(
+                model=model, caller=caller, direction="prompt"
+            ).inc(prompt_tokens)
+        if completion_tokens:
+            _m.llm_tokens.labels(
+                model=model, caller=caller, direction="completion"
+            ).inc(completion_tokens)
+
+        cost = compute_llm_cost_usd(model, prompt_tokens, completion_tokens)
+        if cost is not None:
+            _m.llm_cost_usd.labels(model=model, caller=caller).inc(cost)
+        logger.debug(
+            "USAGE | model={} caller={} prompt={} completion={}{} cost_usd={}",
+            model, caller, prompt_tokens, completion_tokens,
+            " (est)" if estimated else "", cost,
+        )
+        return cost
+    except Exception as exc:  # pragma: no cover - defensive; metrics never fatal
+        logger.debug("Token/cost recording failed for {}: {}", model, exc)
+        return None
+
+
+def _extract_usage(response: Any) -> tuple[int, int]:
+    """Pull (prompt_tokens, completion_tokens) from a Groq response.usage.
+
+    Groq's CompletionUsage carries prompt_tokens/completion_tokens. Returns
+    (0, 0) when usage is missing so callers can no-op cleanly.
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return 0, 0
+    prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+    completion = int(getattr(usage, "completion_tokens", 0) or 0)
+    return prompt, completion
 
 
 # ── Client singleton ──────────────────────────────────────────────────────────
@@ -206,6 +264,8 @@ async def generate(
     try:
         response = await _with_retry(_call)
         _m.llm_latency.labels(model=model).observe(_time.perf_counter() - _start)
+        prompt_tokens, completion_tokens = _extract_usage(response)
+        _record_usage(model, _caller, prompt_tokens, completion_tokens)
         return response.choices[0].message.content
     except GroqTimeoutError:
         _m.llm_errors.labels(model=model, error_type="timeout").inc()
@@ -228,6 +288,7 @@ async def tool_call_loop(
     terminal_tool_name: str = "",
     model: str | None = None,
     tool_executor: Callable[[str, dict], Any] | None = None,
+    _caller: str = "unknown",
 ) -> dict:
     """
     The main agentic loop. Python orchestrates, LLM decides.
@@ -246,6 +307,7 @@ async def tool_call_loop(
         model:              override model (defaults to reasoning_model)
         tool_executor:      fn(tool_name, args_dict) -> result_str
                             if None, tools are recorded but not executed
+        _caller:            label for token/cost metrics (usually the agent NAME)
     """
     client = get_client()
     model = model or settings.reasoning_model
@@ -341,6 +403,9 @@ async def tool_call_loop(
                 ),
             })
             continue
+
+        prompt_tokens, completion_tokens = _extract_usage(response)
+        _record_usage(model, _caller, prompt_tokens, completion_tokens)
 
         message = response.choices[0].message
 
@@ -439,6 +504,7 @@ async def stream(
     messages: list[dict],
     model: str | None = None,
     system: str | None = None,
+    _caller: str = "unknown",
 ) -> AsyncGenerator[str, None]:
     """
     Async streaming completion. Yields text chunks as they arrive.
@@ -451,6 +517,14 @@ async def stream(
         messages: list of {role, content} dicts
         model:    override model (defaults to generation_model)
         system:   optional system prompt
+        _caller:  label for token/cost metrics (e.g. "lesson", "worked_example")
+
+    Note on usage: groq==0.9.0's completions.create() does not accept
+    stream_options={"include_usage": True}, so the server never returns an exact
+    token count for streamed calls. Completion tokens are therefore ESTIMATED as
+    len(streamed_text)//4 and recorded with that caveat (see _record_usage's
+    estimated flag / the gen_ai.usage.is_estimate span attribute). Prompt tokens
+    are not counted for streams.
     """
     client = get_client()
     model = model or settings.generation_model
@@ -500,17 +574,23 @@ async def stream(
     thread_future = asyncio.to_thread(_blocking_stream_to_queue)
     task = asyncio.create_task(thread_future)
 
+    streamed_chars = 0
     try:
         while True:
             chunk = await asyncio.wait_for(chunk_queue.get(), timeout=settings.groq_timeout_seconds + 5)
             if chunk is None:
                 break
+            streamed_chars += len(chunk)
             yield chunk
     except asyncio.TimeoutError:
         logger.warning("stream(): chunk_queue timed out — cancelling stream task")
         task.cancel()
         raise GroqTimeoutError("Groq stream timed out waiting for chunk")
     finally:
+        # Estimate completion tokens from streamed length — the SDK gives us no
+        # exact count for streams (see the docstring). Prompt tokens unknown → 0.
+        if streamed_chars:
+            _record_usage(model, _caller, 0, streamed_chars // 4, estimated=True)
         # Ensure the thread task is awaited to avoid ResourceWarning
         try:
             await task

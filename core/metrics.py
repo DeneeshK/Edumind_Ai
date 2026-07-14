@@ -80,6 +80,17 @@ class EduMindMetrics:
             "Number of LLM retry attempts (429 rate-limit backoffs).",
             ["model"],
         )
+        self.llm_tokens = Counter(
+            "edumind_llm_tokens_total",
+            "LLM tokens consumed by model, caller, and direction (prompt|completion).",
+            ["model", "caller", "direction"],
+        )
+        self.llm_cost_usd = Counter(
+            "edumind_llm_cost_usd_total",
+            "Estimated LLM cost in USD by model and caller "
+            "(only recorded for models with non-zero pricing in GROQ_MODEL_PRICES).",
+            ["model", "caller"],
+        )
 
         # ── 3. Course & curriculum ────────────────────────────────────────────
         self.courses_created = Counter(

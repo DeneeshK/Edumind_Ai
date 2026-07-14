@@ -242,6 +242,7 @@ class BaseAgent:
             terminal_tool_name=self.TERMINAL_TOOL,
             model=model or settings.reasoning_model,
             tool_executor=self._tool_executor_wrapper,
+            _caller=self.NAME,
         )
 
         logger.info("◀ {} finished → keys={}", self.NAME, list(result.keys()))

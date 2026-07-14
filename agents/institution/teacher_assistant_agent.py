@@ -167,6 +167,7 @@ async def ask_teacher_assistant(
         terminal_tool_name="final_answer",
         model=settings.reasoning_model,
         tool_executor=_execute,
+        _caller="teacher_assistant",
     )
 
     answer = str(result.get("answer_markdown") or "").strip()

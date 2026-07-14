@@ -267,6 +267,7 @@ class OrchestratorAgent(BaseAgent):
             terminal_tool_name="route_after_evaluation",
             model=settings.reasoning_model,
             tool_executor=self._tool_executor_wrapper,
+            _caller=self.NAME,
         )
 
         if not self._last_route:
@@ -764,7 +765,8 @@ class OrchestratorAgent(BaseAgent):
         try:
             full_text = []
             async for chunk in stream(messages=messages, system=system,
-                                      model=settings.generation_model):
+                                      model=settings.generation_model,
+                                      _caller="worked_example"):
                 await self._emit(chunk)
                 full_text.append(chunk)
 

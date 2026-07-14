@@ -139,6 +139,43 @@ class Settings(BaseSettings):
     rag_top_k: int = 5                      # chunks to request from the server
 
 
+# ── Groq model pricing (USD per 1,000,000 tokens) ─────────────────────────────
+#
+# ⚠️  MAINTAINER: THESE ARE PLACEHOLDER ZEROS — NOT REAL PRICES. ⚠️
+# Fill in the current Groq per-token pricing for each model from
+# https://groq.com/pricing before relying on the edumind_llm_cost_usd_total
+# metric or the `gen_ai.usage.cost_usd` span attribute. Each entry is
+#     model_name: (usd_per_1m_input_tokens, usd_per_1m_output_tokens)
+# Cost recording is SKIPPED for any model whose price pair is (0.0, 0.0), so
+# leaving these at zero simply disables cost accounting for that model — it
+# never invents a number. Do NOT commit guessed prices.
+GROQ_MODEL_PRICES: dict[str, tuple[float, float]] = {
+    "openai/gpt-oss-120b": (0.0, 0.0),                          # TODO: fill in Groq price
+    "meta-llama/llama-4-scout-17b-16e-instruct": (0.0, 0.0),    # TODO: fill in Groq price
+    "llama-3.1-8b-instant": (0.0, 0.0),                         # TODO: fill in Groq price
+}
+
+
+def compute_llm_cost_usd(
+    model: str, prompt_tokens: int, completion_tokens: int
+) -> float | None:
+    """Return estimated USD cost for a call, or None if the model is unpriced.
+
+    Returns None when the model is absent from GROQ_MODEL_PRICES or priced at
+    (0.0, 0.0) — callers use that to SKIP cost recording rather than emit a
+    misleading $0.00. Prices are per 1,000,000 tokens.
+    """
+    price = GROQ_MODEL_PRICES.get(model)
+    if not price:
+        return None
+    in_price, out_price = price
+    if in_price == 0.0 and out_price == 0.0:
+        return None
+    return (prompt_tokens / 1_000_000) * in_price + (
+        completion_tokens / 1_000_000
+    ) * out_price
+
+
 try:
     settings = Settings()
 except Exception as _e:
