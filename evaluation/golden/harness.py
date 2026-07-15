@@ -112,11 +112,13 @@ async def run_diagnosis(case: dict[str, Any]) -> dict[str, Any]:
     """Diagnose a canned student answer through the live evaluation seam."""
     from agents.evaluation_agent import _module_context, diagnose_student_answer
 
+    from clients.groq_client import GroqRateLimitError
+
     mod_ctx = _module_context(case["module"])
     question = case["question"]
     if isinstance(question, str):
         question = {"question_text": question}
-    return await diagnose_student_answer(
+    diagnosis = await diagnose_student_answer(
         mod_ctx=mod_ctx,
         lesson_content=str(case.get("lesson_excerpt") or ""),
         question=question,
@@ -124,6 +126,12 @@ async def run_diagnosis(case: dict[str, Any]) -> dict[str, Any]:
         confidence=int(case.get("confidence") or 3),
         previous_answers=[],
     )
+    # diagnose_student_answer swallows rate-limit/timeout errors and returns this
+    # fixed fallback. Surface it as a rate-limit so the runner retries instead of
+    # scoring the fallback "uncertain" as a quality failure.
+    if diagnosis.get("missing_reasoning") == "Could not analyze answer.":
+        raise GroqRateLimitError("diagnosis fell back (likely rate limit/timeout)")
+    return diagnosis
 
 
 # ── Lesson ────────────────────────────────────────────────────────────────────

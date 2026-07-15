@@ -22,6 +22,10 @@ jobs:
   golden:
     name: Golden regression suite
     runs-on: ubuntu-latest
+    # The runner paces cases to stay under the 8K-TPM reasoning-model limit
+    # (curriculum=45s, diagnosis/lesson=5s between cases) and retries a rate-limited
+    # case once after 90s. A full run is ~15–20 min; this timeout leaves headroom.
+    timeout-minutes: 40
     env:
       # Config requires these to import; golden runs never touch the DB (metric
       # persistence is disabled in the runner), so a dummy URL is fine.

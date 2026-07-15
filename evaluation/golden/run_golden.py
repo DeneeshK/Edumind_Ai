@@ -33,6 +33,23 @@ from evaluation.golden import harness
 CASES_DIR = Path(__file__).parent / "cases"
 SUITES = ("curriculum", "diagnosis", "lesson")
 
+# Inter-case pacing (seconds). Curriculum builds are token-heavy calls to the 8K-TPM
+# reasoning model, so they need generous spacing to avoid Groq 429s; diagnosis/lesson
+# are light. Overridable with --delay (applies to every suite).
+DEFAULT_DELAYS = {"curriculum": 45.0, "diagnosis": 5.0, "lesson": 5.0}
+
+# On a rate-limit / timeout / transient connection error, wait this long and retry the
+# case ONCE before recording it — so a 429 never masquerades as a quality regression.
+RATE_LIMIT_BACKOFF_SECONDS = 90.0
+
+# Pause between suites so the shared 8K-TPM reasoning model (used by both the
+# curriculum builds and answer diagnosis) recovers before the next suite starts.
+INTER_SUITE_PAUSE_SECONDS = 30.0
+_RATE_LIMIT_HINTS = (
+    "rate limit", "rate-limit", "rate_limit", "connection error",
+    "timed out", "timeout", "temporarily", "429",
+)
+
 # Practice-task detector — mirrors evaluation.metrics.agent_metrics practice check.
 import re as _re
 
@@ -47,6 +64,22 @@ def _check(name: str, passed: bool, detail: str = "") -> dict[str, Any]:
 
 def _contains(haystack: str, needle: str) -> bool:
     return needle.strip().lower() in haystack.lower()
+
+
+def _concept_present(text: str, term: str) -> bool:
+    """Substring match tolerant of simple plural/singular (Arrays↔Array, Hooks↔Hook)."""
+    text_l = text.lower()
+    term_l = term.strip().lower()
+    return term_l in text_l or (len(term_l) > 3 and term_l.rstrip("s") in text_l)
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    """Classify an exception as a transient infrastructure (rate-limit/timeout) error."""
+    from clients.groq_client import GroqRateLimitError, GroqTimeoutError
+    if isinstance(exc, (GroqRateLimitError, GroqTimeoutError)):
+        return True
+    msg = str(exc).lower()
+    return any(hint in msg for hint in _RATE_LIMIT_HINTS)
 
 
 def _total_tokens() -> int:
@@ -108,9 +141,9 @@ async def _run_curriculum_case(case: dict[str, Any], judge_runs: int) -> dict[st
         f"violations={violations}" if violations else "clean",
     ))
 
-    # Deterministic: must_include coverage
+    # Deterministic: must_include coverage (plural/singular tolerant)
     must = list(profile.get("must_include") or [])
-    missing = [t for t in must if not _contains(concepts_text, t)]
+    missing = [t for t in must if not _concept_present(concepts_text, t)]
     checks.append(_check(
         "all must_include present", not missing,
         f"missing={missing}" if missing else "all present",
@@ -236,32 +269,57 @@ def _load_cases(suite: str) -> list[dict[str, Any]]:
     return cases
 
 
-async def run_suite(suite: str, judge_runs: int) -> list[dict[str, Any]]:
-    runner = _SUITE_RUNNERS[suite]
-    results = []
-    for case in _load_cases(suite):
+async def _run_one_case(suite: str, case: dict[str, Any], judge_runs: int) -> dict[str, Any]:
+    """Run a single case once (may raise). Returns a normalised result dict."""
+    outcome = await _SUITE_RUNNERS[suite](case, judge_runs)
+    checks = outcome["checks"]
+    return {
+        "suite": suite, "name": case["name"],
+        "passed": all(c["passed"] for c in checks),
+        "outcome_kind": "quality",
+        "checks": checks, "scores": outcome["scores"],
+    }
+
+
+async def run_suite(suite: str, judge_runs: int, delay: float) -> list[dict[str, Any]]:
+    """Run every case in a suite strictly sequentially, pacing between cases."""
+    results: list[dict[str, Any]] = []
+    cases = _load_cases(suite)
+    for idx, case in enumerate(cases):
         name = case["name"]
         t0 = time.perf_counter()
-        try:
-            outcome = await runner(case, judge_runs)
-            checks = outcome["checks"]
-            passed = all(c["passed"] for c in checks)
-            result = {
-                "suite": suite, "name": name, "passed": passed,
-                "checks": checks, "scores": outcome["scores"],
-                "seconds": round(time.perf_counter() - t0, 1),
-            }
-        except Exception as exc:
-            logger.exception("Golden case '{}/{}' errored", suite, name)
-            result = {
-                "suite": suite, "name": name, "passed": False,
-                "checks": [_check("no-error", False, str(exc))],
-                "scores": {}, "error": str(exc),
-                "seconds": round(time.perf_counter() - t0, 1),
-            }
-        status = "PASS" if result["passed"] else "FAIL"
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                result = await _run_one_case(suite, case, judge_runs)
+                break
+            except Exception as exc:  # noqa: BLE001 — classify then record
+                if _is_rate_limit_error(exc) and attempt == 1:
+                    logger.warning(
+                        "Rate limit/timeout on {}/{} — waiting {}s and retrying once: {}",
+                        suite, name, int(RATE_LIMIT_BACKOFF_SECONDS), exc,
+                    )
+                    await asyncio.sleep(RATE_LIMIT_BACKOFF_SECONDS)
+                    continue
+                # Give up: classify infrastructure (rate-limit/timeout) vs quality.
+                kind = "infrastructure" if _is_rate_limit_error(exc) else "quality"
+                if kind == "quality":
+                    logger.exception("Golden case '{}/{}' errored", suite, name)
+                result = {
+                    "suite": suite, "name": name, "passed": False,
+                    "outcome_kind": kind,
+                    "checks": [_check("ran-without-error", False, str(exc))],
+                    "scores": {}, "error": str(exc),
+                }
+                break
+        result["seconds"] = round(time.perf_counter() - t0, 1)
+        status = "PASS" if result["passed"] else f"FAIL:{result['outcome_kind']}"
         logger.info("[{}] {}/{} ({}s)", status, suite, name, result["seconds"])
         results.append(result)
+        # Pace before the next case in this suite (not after the last).
+        if delay > 0 and idx < len(cases) - 1:
+            await asyncio.sleep(delay)
     return results
 
 
@@ -270,6 +328,13 @@ def _markdown(report: dict[str, Any]) -> str:
     s = report["summary"]
     lines.append(f"- **Result:** {'✅ PASS' if s['passed'] else '❌ FAIL'}")
     lines.append(f"- **Cases:** {s['cases_passed']}/{s['cases_total']} passed")
+    if s.get("infrastructure_failures"):
+        lines.append(
+            f"- **Infrastructure (rate-limit) failures:** {s['infrastructure_failures']} "
+            "— transient, not a quality regression; re-run these."
+        )
+    if s.get("quality_failures"):
+        lines.append(f"- **Quality failures:** {s['quality_failures']} — genuine regressions.")
     lines.append(f"- **Tokens (this run):** ~{s['tokens']:,}")
     lines.append(f"- **Duration:** {s['seconds']}s")
     lines.append("")
@@ -287,7 +352,13 @@ def _markdown(report: dict[str, Any]) -> str:
                 if k in ("ordering", "module_count", "coverage_judge", "quality_judge",
                          "mastery_signal", "word_count")
             )
-            lines.append(f"| {r['name']} | {'✅' if r['passed'] else '❌'} | {score_bits} |")
+            if r["passed"]:
+                mark = "✅"
+            elif r.get("outcome_kind") == "infrastructure":
+                mark = "⚠️ infra"
+            else:
+                mark = "❌"
+            lines.append(f"| {r['name']} | {mark} | {score_bits} |")
         # failing checks detail
         for r in suite_results:
             if not r["passed"]:
@@ -305,16 +376,24 @@ async def main_async(args: argparse.Namespace) -> int:
     tokens_before = _total_tokens()
     t0 = time.perf_counter()
     results: list[dict[str, Any]] = []
-    for suite in suites:
-        results.extend(await run_suite(suite, args.judge_runs))
+    for idx, suite in enumerate(suites):
+        if idx > 0 and INTER_SUITE_PAUSE_SECONDS > 0:
+            await asyncio.sleep(INTER_SUITE_PAUSE_SECONDS)
+        delay = args.delay if args.delay is not None else DEFAULT_DELAYS[suite]
+        logger.info("Running suite '{}' with {}s inter-case delay", suite, delay)
+        results.extend(await run_suite(suite, args.judge_runs, delay))
     seconds = round(time.perf_counter() - t0, 1)
     tokens = _total_tokens() - tokens_before
 
     cases_passed = sum(1 for r in results if r["passed"])
+    infra_failures = sum(1 for r in results if not r["passed"] and r.get("outcome_kind") == "infrastructure")
+    quality_failures = sum(1 for r in results if not r["passed"] and r.get("outcome_kind") != "infrastructure")
     summary = {
         "passed": all(r["passed"] for r in results) and bool(results),
         "cases_total": len(results),
         "cases_passed": cases_passed,
+        "quality_failures": quality_failures,
+        "infrastructure_failures": infra_failures,
         "tokens": tokens,
         "seconds": seconds,
         "judge_runs": args.judge_runs,
@@ -342,6 +421,9 @@ def main() -> None:
     parser.add_argument("--report", default="evaluation/golden/reports/golden_report.json")
     parser.add_argument("--judge-runs", type=int, default=2,
                         help="times to run each judge-based score (mean is taken)")
+    parser.add_argument("--delay", type=float, default=None,
+                        help="inter-case delay (s) applied to every suite; "
+                             "default per-suite: curriculum=45, diagnosis=5, lesson=5")
     args = parser.parse_args()
     sys.exit(asyncio.run(main_async(args)))
 
