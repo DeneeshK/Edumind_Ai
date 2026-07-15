@@ -28,6 +28,7 @@ from core.metrics import metrics as _metrics
 from clients.groq_client import generate
 from config import settings
 from core.curriculum_quality import parse_json_object
+from core.guardrails import fence_user_text
 from prompts import get_prompt
 from db.postgres import (
     get_adaptation_summary,
@@ -126,7 +127,9 @@ async def _generate_probe_question(
         "module": mod_ctx,
         "lesson_excerpt": _lesson_excerpt(lesson_content),
         "trigger_question": trigger_answer.get("question_text", ""),
-        "trigger_answer": trigger_answer.get("answer_text", "")[:400],
+        "trigger_answer": fence_user_text(
+            str(trigger_answer.get("answer_text", ""))[:400], "student_answer"
+        ),
         "detected_weakness": {
             "weak_concepts": weak_concepts,
             "missing_reasoning": missing_reasoning,
@@ -180,14 +183,21 @@ async def diagnose_student_answer(
     replaced. Returns the parsed diagnosis dict, or a safe fallback on failure.
     """
     previous_answers = previous_answers or []
+    # Fence every piece of student-controlled text before it enters the prompt:
+    # the current answer, plus the answer_text of each prior answer. The rest of
+    # a previous-answer record (question_text, our own diagnosis) is trusted.
+    fenced_previous = [
+        {**a, "answer_text": fence_user_text(a.get("answer_text", ""), "student_answer")}
+        for a in previous_answers[-3:]
+    ]
     diagnosis_prompt = json.dumps({
         "task": "diagnose_student_answer",
         "module": mod_ctx,
         "lesson_excerpt": _lesson_excerpt(lesson_content),
         "question": question,
-        "student_answer": answer_text,
+        "student_answer": fence_user_text(answer_text, "student_answer"),
         "confidence_stated": confidence,
-        "previous_answers": previous_answers[-3:],
+        "previous_answers": fenced_previous,
         "instructions": get_prompt("evaluation_diagnose_instructions").render(),
         "return_schema": {
             "correct_concepts": ["..."],
@@ -693,7 +703,7 @@ async def _finalize_impl(
         "answers_summary": [
             {
                 "q": a["question_text"],
-                "a": a["answer_text"][:300],
+                "a": fence_user_text(str(a["answer_text"])[:300], "student_answer"),
                 "signal": (a.get("diagnosis") or {}).get("mastery_signal", "uncertain"),
                 "is_probe": a.get("is_probe", False),
             }

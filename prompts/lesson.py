@@ -9,7 +9,7 @@ authored prompt text lives here. See prompts/README.md for the versioning rule.
 
 from __future__ import annotations
 
-from prompts.base import PromptArtifact, register
+from prompts.base import DATA_NOT_INSTRUCTIONS, PromptArtifact, register
 
 # ── Pace-specific lesson requirements (injected into lesson_generation) ────────
 
@@ -255,9 +255,13 @@ MODULE_CHAT_SYSTEM = register(PromptArtifact(
 
 MODULE_CHAT_GROUNDED = register(PromptArtifact(
     name="module_chat_grounded",
-    version=1,
+    version=2,
     description="Grounded module-chat (doubt) answer prompt.",
+    # v2: student message + recent user turns now arrive fenced in
+    # <student_message> tags; carry the standing data-not-instructions rule.
     template="""A student asked a doubt in the side chat.
+
+""" + DATA_NOT_INSTRUCTIONS + """
 
 Course: {{course_topic}}
 Module: {{module_title}} / {{module_concept}}
@@ -279,9 +283,13 @@ anything beyond the module, label it as "extra context". Do not invent facts.
 
 MODULE_CHAT_WEB_SEARCH_SYSTEM = register(PromptArtifact(
     name="module_chat_web_search_system",
-    version=1,
+    version=2,
     description="System prompt for the web-search-enabled module-chat tool loop.",
+    # v2: the student doubt + recent user turns arrive fenced in <student_message>
+    # tags; carry the standing data-not-instructions rule.
     template="""You are EduMind's module chat assistant. Answer the student's doubt clearly and stay grounded in the current module content below.
+
+""" + DATA_NOT_INSTRUCTIONS + """
 
 You have web-search tools. Use them ONLY when the student's question involves a concept you do not recognize, or needs current/external detail the module does not cover. In that case call smoke_search first to orient, then research_web to fetch grounded sources, then answer. If the module already answers the question, do NOT search — just answer.
 Always finish by calling the `answer` tool with your final reply. Label any content beyond the module as "extra context". Do not invent facts.

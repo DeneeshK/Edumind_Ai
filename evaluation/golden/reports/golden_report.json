@@ -1,0 +1,702 @@
+{
+  "summary": {
+    "passed": false,
+    "cases_total": 22,
+    "cases_passed": 16,
+    "quality_failures": 2,
+    "infrastructure_failures": 4,
+    "tokens": 149148,
+    "seconds": 1217.7,
+    "judge_runs": 2,
+    "suites": [
+      "curriculum",
+      "diagnosis",
+      "lesson"
+    ]
+  },
+  "results": [
+    {
+      "suite": "curriculum",
+      "name": "python_web_dev",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "ordering>=0.0",
+          "passed": true,
+          "detail": "ordering=0.067"
+        },
+        {
+          "name": "module_count in [3,60]",
+          "passed": true,
+          "detail": "count=13"
+        },
+        {
+          "name": "no do_not_include concept",
+          "passed": true,
+          "detail": "clean"
+        },
+        {
+          "name": "all must_include present",
+          "passed": true,
+          "detail": "all present"
+        },
+        {
+          "name": "coverage_judge>=0.5",
+          "passed": true,
+          "detail": "mean=0.800 runs=[0.8, 0.8]"
+        }
+      ],
+      "scores": {
+        "module_count": 13,
+        "ordering": 0.0667,
+        "coverage_judge": 0.8,
+        "coverage_runs": [
+          0.8,
+          0.8
+        ]
+      },
+      "seconds": 60.5
+    },
+    {
+      "suite": "curriculum",
+      "name": "thermodynamics",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "ordering>=0.0",
+          "passed": true,
+          "detail": "ordering=0.286"
+        },
+        {
+          "name": "module_count in [4,85]",
+          "passed": true,
+          "detail": "count=15"
+        },
+        {
+          "name": "no do_not_include concept",
+          "passed": true,
+          "detail": "clean"
+        },
+        {
+          "name": "all must_include present",
+          "passed": true,
+          "detail": "all present"
+        },
+        {
+          "name": "coverage_judge>=0.5",
+          "passed": true,
+          "detail": "mean=0.875 runs=[0.85, 0.9]"
+        }
+      ],
+      "scores": {
+        "module_count": 15,
+        "ordering": 0.2857,
+        "coverage_judge": 0.875,
+        "coverage_runs": [
+          0.85,
+          0.9
+        ]
+      },
+      "seconds": 16.1
+    },
+    {
+      "suite": "curriculum",
+      "name": "sql_for_analysts",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "ordering>=0.0",
+          "passed": true,
+          "detail": "ordering=0.786"
+        },
+        {
+          "name": "module_count in [4,60]",
+          "passed": true,
+          "detail": "count=15"
+        },
+        {
+          "name": "no do_not_include concept",
+          "passed": true,
+          "detail": "clean"
+        },
+        {
+          "name": "all must_include present",
+          "passed": true,
+          "detail": "all present"
+        },
+        {
+          "name": "coverage_judge>=0.5",
+          "passed": true,
+          "detail": "mean=0.815 runs=[0.83, 0.8]"
+        }
+      ],
+      "scores": {
+        "module_count": 15,
+        "ordering": 0.7857,
+        "coverage_judge": 0.815,
+        "coverage_runs": [
+          0.83,
+          0.8
+        ]
+      },
+      "seconds": 22.5
+    },
+    {
+      "suite": "curriculum",
+      "name": "do_not_include_heavy",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "ordering>=0.0",
+          "passed": true,
+          "detail": "ordering=0.500"
+        },
+        {
+          "name": "module_count in [3,40]",
+          "passed": true,
+          "detail": "count=11"
+        },
+        {
+          "name": "no do_not_include concept",
+          "passed": true,
+          "detail": "clean"
+        },
+        {
+          "name": "all must_include present",
+          "passed": true,
+          "detail": "all present"
+        },
+        {
+          "name": "coverage_judge>=0.5",
+          "passed": true,
+          "detail": "mean=0.800 runs=[0.8, 0.8]"
+        }
+      ],
+      "scores": {
+        "module_count": 11,
+        "ordering": 0.5,
+        "coverage_judge": 0.8,
+        "coverage_runs": [
+          0.8,
+          0.8
+        ]
+      },
+      "seconds": 20.1
+    },
+    {
+      "suite": "curriculum",
+      "name": "known_concepts_heavy",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "ordering>=0.0",
+          "passed": true,
+          "detail": "ordering=0.433"
+        },
+        {
+          "name": "module_count in [3,60]",
+          "passed": true,
+          "detail": "count=15"
+        },
+        {
+          "name": "no do_not_include concept",
+          "passed": true,
+          "detail": "clean"
+        },
+        {
+          "name": "all must_include present",
+          "passed": true,
+          "detail": "all present"
+        },
+        {
+          "name": "coverage_judge>=0.5",
+          "passed": true,
+          "detail": "mean=0.825 runs=[0.85, 0.8]"
+        }
+      ],
+      "scores": {
+        "module_count": 15,
+        "ordering": 0.4333,
+        "coverage_judge": 0.825,
+        "coverage_runs": [
+          0.85,
+          0.8
+        ]
+      },
+      "seconds": 21.1
+    },
+    {
+      "suite": "curriculum",
+      "name": "calculus_beginner",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "ordering>=0.0",
+          "passed": true,
+          "detail": "ordering=0.231"
+        },
+        {
+          "name": "module_count in [4,60]",
+          "passed": true,
+          "detail": "count=15"
+        },
+        {
+          "name": "no do_not_include concept",
+          "passed": true,
+          "detail": "clean"
+        },
+        {
+          "name": "all must_include present",
+          "passed": true,
+          "detail": "all present"
+        },
+        {
+          "name": "coverage_judge>=0.5",
+          "passed": true,
+          "detail": "mean=0.850 runs=[0.85, 0.85]"
+        }
+      ],
+      "scores": {
+        "module_count": 15,
+        "ordering": 0.2308,
+        "coverage_judge": 0.85,
+        "coverage_runs": [
+          0.85,
+          0.85
+        ]
+      },
+      "seconds": 30.7
+    },
+    {
+      "suite": "curriculum",
+      "name": "react_frontend",
+      "passed": false,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "ordering>=0.0",
+          "passed": true,
+          "detail": "ordering=0.556"
+        },
+        {
+          "name": "module_count in [3,40]",
+          "passed": true,
+          "detail": "count=14"
+        },
+        {
+          "name": "no do_not_include concept",
+          "passed": true,
+          "detail": "clean"
+        },
+        {
+          "name": "all must_include present",
+          "passed": false,
+          "detail": "missing=['Hooks']"
+        },
+        {
+          "name": "coverage_judge>=0.5",
+          "passed": true,
+          "detail": "mean=0.900 runs=[0.8, 1.0]"
+        }
+      ],
+      "scores": {
+        "module_count": 14,
+        "ordering": 0.5556,
+        "coverage_judge": 0.9,
+        "coverage_runs": [
+          0.8,
+          1.0
+        ]
+      },
+      "seconds": 32.7
+    },
+    {
+      "suite": "curriculum",
+      "name": "dsa_interview",
+      "passed": false,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "ordering>=0.0",
+          "passed": true,
+          "detail": "ordering=0.800"
+        },
+        {
+          "name": "module_count in [4,85]",
+          "passed": true,
+          "detail": "count=29"
+        },
+        {
+          "name": "no do_not_include concept",
+          "passed": true,
+          "detail": "clean"
+        },
+        {
+          "name": "all must_include present",
+          "passed": false,
+          "detail": "missing=['Arrays', 'Trees']"
+        },
+        {
+          "name": "coverage_judge>=0.5",
+          "passed": true,
+          "detail": "mean=0.850 runs=[0.9, 0.8]"
+        }
+      ],
+      "scores": {
+        "module_count": 29,
+        "ordering": 0.8,
+        "coverage_judge": 0.85,
+        "coverage_runs": [
+          0.9,
+          0.8
+        ]
+      },
+      "seconds": 35.4
+    },
+    {
+      "suite": "diagnosis",
+      "name": "clearly_correct",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "mastery_signal in ['clear']",
+          "passed": true,
+          "detail": "got='clear'"
+        },
+        {
+          "name": "weak_concept absent: Return values",
+          "passed": true,
+          "detail": "weak=[]"
+        }
+      ],
+      "scores": {
+        "mastery_signal": "clear",
+        "weak_concepts": []
+      },
+      "seconds": 6.2
+    },
+    {
+      "suite": "diagnosis",
+      "name": "clearly_wrong",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "mastery_signal in ['weak', 'uncertain']",
+          "passed": true,
+          "detail": "got='weak'"
+        }
+      ],
+      "scores": {
+        "mastery_signal": "weak",
+        "weak_concepts": [
+          "Return values"
+        ]
+      },
+      "seconds": 2.4
+    },
+    {
+      "suite": "diagnosis",
+      "name": "vague",
+      "passed": false,
+      "outcome_kind": "infrastructure",
+      "checks": [
+        {
+          "name": "ran-without-error",
+          "passed": false,
+          "detail": "diagnosis fell back (likely rate limit/timeout)"
+        }
+      ],
+      "scores": {},
+      "error": "diagnosis fell back (likely rate limit/timeout)",
+      "seconds": 104.6
+    },
+    {
+      "suite": "diagnosis",
+      "name": "confident_but_wrong",
+      "passed": false,
+      "outcome_kind": "infrastructure",
+      "checks": [
+        {
+          "name": "ran-without-error",
+          "passed": false,
+          "detail": "diagnosis fell back (likely rate limit/timeout)"
+        }
+      ],
+      "scores": {},
+      "error": "diagnosis fell back (likely rate limit/timeout)",
+      "seconds": 104.6
+    },
+    {
+      "suite": "diagnosis",
+      "name": "injection_adversarial",
+      "passed": false,
+      "outcome_kind": "infrastructure",
+      "checks": [
+        {
+          "name": "ran-without-error",
+          "passed": false,
+          "detail": "diagnosis fell back (likely rate limit/timeout)"
+        }
+      ],
+      "scores": {},
+      "error": "diagnosis fell back (likely rate limit/timeout)",
+      "seconds": 104.9
+    },
+    {
+      "suite": "diagnosis",
+      "name": "partial_correct",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "mastery_signal not in ['clear']",
+          "passed": true,
+          "detail": "got='weak'"
+        }
+      ],
+      "scores": {
+        "mastery_signal": "weak",
+        "weak_concepts": [
+          "Mutability"
+        ]
+      },
+      "seconds": 2.5
+    },
+    {
+      "suite": "diagnosis",
+      "name": "correct_code_trace",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "mastery_signal in ['clear']",
+          "passed": true,
+          "detail": "got='clear'"
+        },
+        {
+          "name": "weak_concept absent: For loops",
+          "passed": true,
+          "detail": "weak=[]"
+        }
+      ],
+      "scores": {
+        "mastery_signal": "clear",
+        "weak_concepts": []
+      },
+      "seconds": 1.5
+    },
+    {
+      "suite": "diagnosis",
+      "name": "misconception",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "mastery_signal not in ['clear']",
+          "passed": true,
+          "detail": "got='weak'"
+        }
+      ],
+      "scores": {
+        "mastery_signal": "weak",
+        "weak_concepts": [
+          "Mutable defaults",
+          "Default argument evaluation"
+        ]
+      },
+      "seconds": 1.5
+    },
+    {
+      "suite": "diagnosis",
+      "name": "dont_know",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "mastery_signal in ['weak', 'uncertain']",
+          "passed": true,
+          "detail": "got='weak'"
+        }
+      ],
+      "scores": {
+        "mastery_signal": "weak",
+        "weak_concepts": [
+          "Lookup"
+        ]
+      },
+      "seconds": 151.8
+    },
+    {
+      "suite": "diagnosis",
+      "name": "detailed_correct_math",
+      "passed": false,
+      "outcome_kind": "infrastructure",
+      "checks": [
+        {
+          "name": "ran-without-error",
+          "passed": false,
+          "detail": "diagnosis fell back (likely rate limit/timeout)"
+        }
+      ],
+      "scores": {},
+      "error": "diagnosis fell back (likely rate limit/timeout)",
+      "seconds": 104.7
+    },
+    {
+      "suite": "lesson",
+      "name": "python_functions_medium",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "required concepts present",
+          "passed": true,
+          "detail": "all present"
+        },
+        {
+          "name": "length in [120,2000] words",
+          "passed": true,
+          "detail": "words=674"
+        },
+        {
+          "name": "has practice/example",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "quality_judge>=0.6",
+          "passed": true,
+          "detail": "mean=0.874 runs=[0.8916571428571428, 0.8566571428571428]"
+        }
+      ],
+      "scores": {
+        "word_count": 674,
+        "quality_judge": 0.8742,
+        "quality_runs": [
+          0.8917,
+          0.8567
+        ]
+      },
+      "seconds": 3.3
+    },
+    {
+      "suite": "lesson",
+      "name": "thermo_first_law_deep",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "required concepts present",
+          "passed": true,
+          "detail": "all present"
+        },
+        {
+          "name": "length in [200,4000] words",
+          "passed": true,
+          "detail": "words=1010"
+        },
+        {
+          "name": "has practice/example",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "quality_judge>=0.6",
+          "passed": true,
+          "detail": "mean=0.940 runs=[0.9226363636363636, 0.9576363636363635]"
+        }
+      ],
+      "scores": {
+        "word_count": 1010,
+        "quality_judge": 0.9401,
+        "quality_runs": [
+          0.9226,
+          0.9576
+        ]
+      },
+      "seconds": 7.0
+    },
+    {
+      "suite": "lesson",
+      "name": "sql_joins_fast",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "required concepts present",
+          "passed": true,
+          "detail": "all present"
+        },
+        {
+          "name": "length in [80,1400] words",
+          "passed": true,
+          "detail": "words=424"
+        },
+        {
+          "name": "has practice/example",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "quality_judge>=0.6",
+          "passed": true,
+          "detail": "mean=0.912 runs=[0.9299999999999999, 0.895]"
+        }
+      ],
+      "scores": {
+        "word_count": 424,
+        "quality_judge": 0.9125,
+        "quality_runs": [
+          0.93,
+          0.895
+        ]
+      },
+      "seconds": 2.3
+    },
+    {
+      "suite": "lesson",
+      "name": "french_revolution_medium",
+      "passed": true,
+      "outcome_kind": "quality",
+      "checks": [
+        {
+          "name": "required concepts present",
+          "passed": true,
+          "detail": "all present"
+        },
+        {
+          "name": "length in [150,2500] words",
+          "passed": true,
+          "detail": "words=835"
+        },
+        {
+          "name": "has practice/example",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "quality_judge>=0.6",
+          "passed": true,
+          "detail": "mean=0.888 runs=[0.881, 0.895]"
+        }
+      ],
+      "scores": {
+        "word_count": 835,
+        "quality_judge": 0.888,
+        "quality_runs": [
+          0.881,
+          0.895
+        ]
+      },
+      "seconds": 5.8
+    }
+  ]
+}

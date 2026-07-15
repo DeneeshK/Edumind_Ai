@@ -39,6 +39,15 @@ blocks, concept lists) and pass it in; the authored prompt text lives here.
    (A helper capture lives in `tests/unit/prompt_snapshot_cases.py`.)
 3. New prompts start at **version 1**.
 
+### Change log
+
+- `evaluation_diagnose_instructions` **v1 → v2**: added an explicit fair-grading rule.
+  v1 ("notice what they DON'T say") biased the grader toward inventing gaps, so
+  complete, correct answers were sometimes scored `uncertain` instead of `clear`. v2
+  requires a complete, correct, well-reasoned answer to be scored `clear` while keeping
+  wrong/vague answers `weak`/`uncertain`. Snapshot (`evaluation_diagnose_payload.txt`)
+  updated in the same commit; caught by the golden `diagnosis` suite.
+
 ## Traceability
 
 When a registry prompt drives a `clients.groq_client.generate` call, the call passes

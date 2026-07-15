@@ -267,6 +267,15 @@ Judge-based scores are run twice and averaged to damp nondeterminism. The runner
 thin DB-free seams (`_build_plan`, `diagnose_student_answer`, `generate_lesson_content`)
 so it never needs the production DB, and metric persistence is disabled during a run.
 
+The runner paces cases (curriculum 45s, diagnosis/lesson 5s between cases, 30s between
+suites) and retries a rate-limited case once after 90s, so a Groq 429 is reported as an
+`infrastructure` failure rather than masquerading as a quality regression. The
+curriculum suite runs **5 representative cases** (Python web dev, a do_not_include-heavy
+JavaScript case, a known_concepts-heavy ML case, thermodynamics, and DSA) to stay within
+the reasoning model's ~8K-TPM limit and the ~25-minute budget; three further curriculum
+cases are kept under `cases/curriculum/_disabled/` and can be re-enabled by moving them
+back up one directory.
+
 Run it locally (needs a real `GROQ_API_KEY`, which `.env` provides):
 
 ```bash

@@ -36,6 +36,7 @@ from core.curriculum_quality import (
     validate_lesson_quality,
     validate_questions_grounded,
 )
+from core.guardrails import fence_chat_history, fence_user_text
 from core.roadmap_service import CourseRoadmapService
 from core.student_model import StudentState
 from prompts import get_prompt
@@ -1943,7 +1944,7 @@ async def _answer_doubt_with_web_search(
     try:
         result = await tool_call_loop(
             system=system,
-            user_message=f"Student doubt: {message}",
+            user_message=f"Student doubt: {fence_user_text(message, 'student_message')}",
             tools=tools,
             terminal_tool_name="answer",
             model=settings.generation_model,
@@ -1983,7 +1984,7 @@ def module_chat_web_search_system(context: str, history: list[dict[str, Any]]) -
     """Build the system prompt for the web-search-enabled module chat tool loop."""
     return get_prompt("module_chat_web_search_system").render(
         module_content=context[:6000],
-        recent_chat=json.dumps(history[-6:], default=str),
+        recent_chat=json.dumps(fence_chat_history(history[-6:]), default=str),
     )
 
 
@@ -2001,9 +2002,9 @@ def module_chat_prompt(
         module_title=module.get('title'),
         module_concept=module.get('concept'),
         dtype=dtype,
-        message=message,
+        message=fence_user_text(message, "student_message"),
         module_content=context[:6000],
-        recent_chat=json.dumps(history[-6:], default=str),
+        recent_chat=json.dumps(fence_chat_history(history[-6:]), default=str),
     )
 
 
