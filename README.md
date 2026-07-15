@@ -33,6 +33,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full breakdown.
 - External LLM/search clients: `clients/`
 - Evaluation metrics and report generation: `evaluation/`
 - Versioned prompt registry: `prompts/` (live-flow prompts as tracked artifacts)
+- Prompt-injection guardrails: `core/guardrails.py` (student text fenced as data) + `core/llm_schemas.py` (Pydantic-validated LLM JSON with an observable failure metric) — see [Architecture → Guardrails](docs/ARCHITECTURE.md#guardrails)
 - Golden prompt-regression suite: `evaluation/golden/`
 - Docker Compose runtime: `docker-compose.yml`
 
