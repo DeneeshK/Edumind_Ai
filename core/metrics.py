@@ -165,6 +165,13 @@ class EduMindMetrics:
             ["pace"],
             buckets=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0),
         )
+        self.llm_schema_failures = Counter(
+            "edumind_llm_schema_failures_total",
+            "LLM JSON outputs that failed Pydantic schema validation (fell back to a "
+            "safe default). Non-zero means the model produced malformed or adversarial "
+            "output for that caller/schema.",
+            ["caller", "schema"],
+        )
 
         # ── 6. External API health ────────────────────────────────────────────
         self.tavily_requests = Counter(

@@ -29,6 +29,7 @@ from clients.groq_client import generate
 from config import settings
 from core.curriculum_quality import parse_json_object
 from core.guardrails import fence_user_text
+from core.llm_schemas import AnswerDiagnosis, FinalReport, ProbeQuestion, parse_llm_json
 from prompts import get_prompt
 from db.postgres import (
     get_adaptation_summary,
@@ -158,9 +159,9 @@ async def _generate_probe_question(
             _prompt_name="evaluation_probe_instructions",
             _prompt_version=get_prompt("evaluation_probe_instructions").version,
         )
-        data = parse_json_object(raw)
-        if data.get("question_text"):
-            return data
+        probe, _err = parse_llm_json(raw, ProbeQuestion, caller="evaluation.probe")
+        if probe is not None:
+            return probe.model_dump()
     except Exception as exc:
         logger.warning("Probe question generation failed: {}", exc)
     return None
@@ -222,17 +223,25 @@ async def diagnose_student_answer(
             _prompt_name="evaluation_diagnose_instructions",
             _prompt_version=get_prompt("evaluation_diagnose_instructions").version,
         )
-        return parse_json_object(raw)
+        diagnosis, _err = parse_llm_json(raw, AnswerDiagnosis, caller="evaluation.diagnose")
+        if diagnosis is not None:
+            # Return a plain dict: the diagnosis is persisted as JSON in the
+            # evaluation session and read via .get() by the finalize/probe paths
+            # and the golden harness. It is now schema-validated (clamped scores,
+            # normalized lists, in-vocab mastery_signal) instead of a raw parse.
+            return diagnosis.model_dump()
+        # Validation failed (observable via the schema-failure counter): fall
+        # through to the same safe fallback used on an LLM error.
     except Exception as exc:
         logger.warning("Answer diagnosis failed: {}", exc)
-        return {
-            "correct_concepts": [],
-            "weak_concepts": mod_ctx.get("concepts_taught", []),
-            "missing_reasoning": "Could not analyze answer.",
-            "mastery_signal": "uncertain",
-            "confidence_score": 0.5,
-            "probe_worthy": False,
-        }
+    return {
+        "correct_concepts": [],
+        "weak_concepts": mod_ctx.get("concepts_taught", []),
+        "missing_reasoning": "Could not analyze answer.",
+        "mastery_signal": "uncertain",
+        "confidence_score": 0.5,
+        "probe_worthy": False,
+    }
 
 
 async def start_session(
@@ -749,27 +758,33 @@ async def _finalize_impl(
             _prompt_name="evaluation_finalize_instructions",
             _prompt_version=get_prompt("evaluation_finalize_instructions").version,
         )
-        report_data = parse_json_object(raw)
+        report, _err = parse_llm_json(raw, FinalReport, caller="evaluation.finalize")
     except Exception as exc:
         logger.warning("Final evaluation report generation failed: {}", exc)
-        report_data = {
-            "strengths": list(dict.fromkeys(all_correct)),
-            "weak_concepts": list(dict.fromkeys(all_weak)),
-            "misconceptions": [],
-            "mastery_score": mastery_score,
-            "confidence_trend": "unknown",
-            "decision": "ADVANCE" if mastery_score >= threshold else "RETEACH_WEAK_CONCEPTS",
-            "motivational_feedback": "You've completed the evaluation. Keep going!",
-            "transition_feedback": "Moving to the next module.",
-            "adaptation_summary": {"notes": "", "weak_concepts": list(dict.fromkeys(all_weak))},
-        }
+        report = None
 
-    decision = report_data.get("decision", "ADVANCE")
+    if report is None:
+        # Schema failure or LLM error — both observable, both fall back to a
+        # report computed from the per-answer mastery signals.
+        report = FinalReport(
+            strengths=list(dict.fromkeys(all_correct)),
+            weak_concepts=list(dict.fromkeys(all_weak)),
+            misconceptions=[],
+            mastery_score=mastery_score,
+            confidence_trend="unknown",
+            decision="ADVANCE" if mastery_score >= threshold else "RETEACH_WEAK_CONCEPTS",
+            motivational_feedback="You've completed the evaluation. Keep going!",
+            transition_feedback="Moving to the next module.",
+            adaptation_summary={"notes": "", "weak_concepts": list(dict.fromkeys(all_weak))},
+        )
+
+    report_data = report.model_dump()
+    decision = report.decision
     if decision not in DECISION_ENUM:
         decision = "ADVANCE" if mastery_score >= threshold else "RETEACH_WEAK_CONCEPTS"
 
-    final_mastery = float(report_data.get("mastery_score") or mastery_score)
-    misconception = report_data.get("misconceptions") or []
+    final_mastery = float(report.mastery_score or mastery_score)
+    misconception = report.misconceptions or []
     misconception_type = misconception[0] if misconception else None
 
     concept = module.get("concept", mod_ctx.get("concept", ""))
@@ -807,7 +822,7 @@ async def _finalize_impl(
         "recommended_action": decision,
     })
 
-    adaptation_summary = report_data.get("adaptation_summary") or {}
+    adaptation_summary = dict(report.adaptation_summary or {})
     adaptation_summary["weak_concepts"] = list(dict.fromkeys(
         (adaptation_summary.get("weak_concepts") or []) + list(dict.fromkeys(all_weak))
     ))
@@ -818,9 +833,9 @@ async def _finalize_impl(
     return {
         "final_report": report_data,
         "decision": decision,
-        "motivational_feedback": report_data.get("motivational_feedback", ""),
-        "transition_feedback": report_data.get("transition_feedback", ""),
-        "reteach_data": report_data.get("reteach_data") or {},
+        "motivational_feedback": report.motivational_feedback,
+        "transition_feedback": report.transition_feedback,
+        "reteach_data": report.reteach_data or {},
         "status": "completed",
     }
 

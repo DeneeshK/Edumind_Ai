@@ -37,6 +37,7 @@ from core.curriculum_quality import (
     validate_questions_grounded,
 )
 from core.guardrails import fence_chat_history, fence_user_text
+from core.llm_schemas import GeneratedQuestionList, parse_llm_json
 from core.roadmap_service import CourseRoadmapService
 from core.student_model import StudentState
 from prompts import get_prompt
@@ -1293,11 +1294,16 @@ async def _retry_grounded_questions_with_prompt(
             _prompt_name="question_generation_retry",
             _prompt_version=get_prompt("question_generation_retry").version,
         )
-        data = parse_json_object(raw)
+        parsed, _err = parse_llm_json(
+            raw, GeneratedQuestionList, caller="course_service.question_generation"
+        )
+        # On schema failure `parsed` is None (observable via the counter); the
+        # empty list flows into the same no-questions fallback below.
+        raw_questions = [q.model_dump() for q in parsed.questions] if parsed else []
         questions = normalize_question_ids(
             course_id,
             module_id,
-            _coerce_question_list(data.get("questions"), module),
+            _coerce_question_list(raw_questions, module),
         )
         validation = validate_questions_grounded(questions, content, module)
         return questions, validation

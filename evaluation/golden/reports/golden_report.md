@@ -1,26 +1,25 @@
 # Golden eval report
 
 - **Result:** ❌ FAIL
-- **Cases:** 16/22 passed
-- **Infrastructure (rate-limit) failures:** 4 — transient, not a quality regression; re-run these.
-- **Quality failures:** 2 — genuine regressions.
-- **Tokens (this run):** ~149,148
-- **Duration:** 1217.7s
+- **Cases:** 10/19 passed
+- **Infrastructure (rate-limit) failures:** 9 — transient, not a quality regression; re-run these.
+- **Tokens (this run):** ~27,927
+- **Duration:** 1608.7s
 
 ## curriculum
 
 | Case | Result | Key scores |
 | --- | --- | --- |
-| python_web_dev | ✅ | module_count=13, ordering=0.0667, coverage_judge=0.8 |
-| thermodynamics | ✅ | module_count=15, ordering=0.2857, coverage_judge=0.875 |
-| sql_for_analysts | ✅ | module_count=15, ordering=0.7857, coverage_judge=0.815 |
-| do_not_include_heavy | ✅ | module_count=11, ordering=0.5, coverage_judge=0.8 |
-| known_concepts_heavy | ✅ | module_count=15, ordering=0.4333, coverage_judge=0.825 |
-| calculus_beginner | ✅ | module_count=15, ordering=0.2308, coverage_judge=0.85 |
-| react_frontend | ❌ | module_count=14, ordering=0.5556, coverage_judge=0.9 |
-| dsa_interview | ❌ | module_count=29, ordering=0.8, coverage_judge=0.85 |
-  - ❌ `react_frontend` — all must_include present (missing=['Hooks'])
-  - ❌ `dsa_interview` — all must_include present (missing=['Arrays', 'Trees'])
+| python_web_dev | ⚠️ infra |  |
+| thermodynamics | ⚠️ infra |  |
+| do_not_include_heavy | ⚠️ infra |  |
+| known_concepts_heavy | ⚠️ infra |  |
+| dsa_interview | ⚠️ infra |  |
+  - ❌ `python_web_dev` — ran-without-error (Groq rate limit exceeded after 3 retries)
+  - ❌ `thermodynamics` — ran-without-error (Groq rate limit exceeded after 3 retries)
+  - ❌ `do_not_include_heavy` — ran-without-error (Groq rate limit exceeded after 3 retries)
+  - ❌ `known_concepts_heavy` — ran-without-error (Groq rate limit exceeded after 3 retries)
+  - ❌ `dsa_interview` — ran-without-error (Groq rate limit exceeded after 3 retries)
 
 ## diagnosis
 
@@ -28,24 +27,24 @@
 | --- | --- | --- |
 | clearly_correct | ✅ | mastery_signal=clear |
 | clearly_wrong | ✅ | mastery_signal=weak |
-| vague | ⚠️ infra |  |
-| confident_but_wrong | ⚠️ infra |  |
+| vague | ✅ | mastery_signal=uncertain |
+| confident_but_wrong | ✅ | mastery_signal=weak |
 | injection_adversarial | ⚠️ infra |  |
 | partial_correct | ✅ | mastery_signal=weak |
-| correct_code_trace | ✅ | mastery_signal=clear |
+| correct_code_trace | ⚠️ infra |  |
 | misconception | ✅ | mastery_signal=weak |
-| dont_know | ✅ | mastery_signal=weak |
+| dont_know | ⚠️ infra |  |
 | detailed_correct_math | ⚠️ infra |  |
-  - ❌ `vague` — ran-without-error (diagnosis fell back (likely rate limit/timeout))
-  - ❌ `confident_but_wrong` — ran-without-error (diagnosis fell back (likely rate limit/timeout))
   - ❌ `injection_adversarial` — ran-without-error (diagnosis fell back (likely rate limit/timeout))
+  - ❌ `correct_code_trace` — ran-without-error (diagnosis fell back (likely rate limit/timeout))
+  - ❌ `dont_know` — ran-without-error (diagnosis fell back (likely rate limit/timeout))
   - ❌ `detailed_correct_math` — ran-without-error (diagnosis fell back (likely rate limit/timeout))
 
 ## lesson
 
 | Case | Result | Key scores |
 | --- | --- | --- |
-| python_functions_medium | ✅ | word_count=674, quality_judge=0.8742 |
-| thermo_first_law_deep | ✅ | word_count=1010, quality_judge=0.9401 |
-| sql_joins_fast | ✅ | word_count=424, quality_judge=0.9125 |
-| french_revolution_medium | ✅ | word_count=835, quality_judge=0.888 |
+| python_functions_medium | ✅ | word_count=645, quality_judge=0.9509 |
+| thermo_first_law_deep | ✅ | word_count=924, quality_judge=0.9226 |
+| sql_joins_fast | ✅ | word_count=390, quality_judge=0.9103 |
+| french_revolution_medium | ✅ | word_count=735, quality_judge=0.923 |
