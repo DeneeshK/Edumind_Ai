@@ -1,135 +1,188 @@
-# EduMind AI Backend
+# EduMind AI
 
-FastAPI backend for EduMind's adaptive learning product. The service creates
-personalized courses, generates module lessons with LLMs, evaluates learner
-answers, stores progress in PostgreSQL, and exposes frontend-ready course APIs.
+**Adaptive learning backend** — turns a learner's goal into a personalized course,
+teaches it module by module, evaluates understanding through Socratic questioning
+rather than multiple choice, and adapts the next lesson to what the evaluation
+actually found.
 
-This repository is backend-only. The frontend is deployed separately and talks
-to this API over authenticated HTTP and Server-Sent Events.
+Live at **[edumindai.org](https://edumindai.org)** · API at
+`course-api.edumindai.org` · backend-only repository (frontend deployed
+separately, see [Edumind_Ai_frontend](../Edumind_Ai_frontend)).
 
-## Live vs Legacy Code Paths
+---
+
+## What it does
+
+1. **Intent capture** — a learner states a topic, goal, prior knowledge, and pace.
+   Google OAuth (or dev login) identifies them; their profile is sanitized and
+   carried through every downstream prompt.
+2. **Curriculum planning** — `CurriculumArchitectAgent` runs a two-call pipeline
+   (coverage planner → sequencer) plus an LLM auditor pass, then validates the
+   result structurally (prerequisite ordering, scope, dedup) before it's saved.
+3. **Lesson generation** — each module's lesson is generated with the learner's
+   adaptation history folded in: prior weak concepts, doubt patterns, and stated
+   style preference all become concrete instructions in the lesson prompt, not
+   just metadata.
+4. **Grounded evaluation** — the evaluator diagnoses each free-text answer
+   against the actual lesson content (never inventing outside material), decides
+   whether the answer is confident, vague, or wrong, and chains a targeted
+   follow-up probe off the specific weakness it just found — closer to an
+   interviewer digging into an answer than a quiz grader.
+5. **Adaptation** — the diagnosis feeds an adaptation summary that changes how
+   the *next* module is written: more worked examples, a prerequisite recap, a
+   slower pace — whichever the evidence calls for.
+
+## Engineering highlights
+
+This project is built to be read, not just run — the things below are the parts
+worth opening first:
+
+- **Model routing, not one-size-fits-all** — reasoning-heavy steps (curriculum
+  sequencing, answer diagnosis) run on `openai/gpt-oss-120b`; high-throughput
+  generation (lessons, coverage lists) runs on Llama 4 Scout; small/cheap tasks
+  use `llama-3.1-8b-instant`. Token counts and per-model cost are tracked in
+  Prometheus (`edumind_llm_tokens_total`, `edumind_llm_cost_usd_total`), not
+  just assumed.
+- **A versioned prompt registry + golden regression suite** — the prompts
+  driving curriculum, lesson, and evaluation generation are tracked artifacts
+  (`prompts/`) with render-identical snapshot tests, not scattered f-strings. A
+  golden eval suite (`evaluation/golden/`) runs real curriculum/diagnosis/lesson
+  cases through the production code paths and scores them with the same
+  LLM-judge metrics used at runtime — including a standing prompt-injection
+  regression case — so a prompt edit that degrades quality can be caught before
+  it ships.
+- **Guardrails against the actual failure modes of LLM systems** — student
+  input is fenced as data (never instructions) before it reaches a grading
+  prompt (`core/guardrails.py`), and every LLM JSON response the live flow
+  depends on is Pydantic-validated (`core/llm_schemas.py`) with an *observable*
+  fallback — malformed output degrades safely and increments a metric, instead
+  of silently becoming a wrong default three layers downstream.
+- **Retrieval via a decoupled MCP server** — web-search RAG (HyDE + multi-query
+  expansion, pgvector, idempotent per-namespace ingestion) runs in a standalone
+  `edumind_mcp_search` server, kept out of this API's process so embedding
+  models never load into the same memory footprint serving requests. The LLM
+  itself decides when a concept is unfamiliar enough to warrant a web search —
+  the tool is offered, not forced.
+- **Request-scoped tracing, opt-in** — OpenTelemetry spans (GenAI semantic
+  conventions) follow one request through every agent, LLM call, and MCP tool
+  call, with latency and token cost per step. Off by default
+  (`OTEL_ENABLED=false`, zero-cost no-op spans); point it at
+  [Phoenix](https://github.com/Arize-ai/phoenix) locally to see the full trace
+  tree for a real course-creation or evaluation session.
+- **An evaluation framework that scores the system, not just the student** —
+  `evaluation/` runs deterministic checks (prerequisite ordering, structural
+  validity) alongside LLM-judge metrics (curriculum coverage, lesson quality,
+  question quality) at session hooks and writes weekly/monthly aggregate
+  reports — separate from the per-student evaluation the product runs live.
+
+## Tech stack
+
+| Layer | Choice |
+| --- | --- |
+| API | FastAPI, Uvicorn, SSE streaming |
+| LLM | Groq (`gpt-oss-120b`, Llama 4 Scout, `llama-3.1-8b-instant`) |
+| Retrieval | Standalone MCP server · pgvector · HyDE + multi-query |
+| Database | PostgreSQL (asyncpg) |
+| Auth | Google OAuth2 + signed session cookies (`python-jose`) |
+| Observability | Prometheus + Grafana, OpenTelemetry + Phoenix (opt-in) |
+| Validation | Pydantic v2 |
+| Frontend | React, Vite, Tailwind, Recharts *(separate repo)* |
+| Deployment | Docker Compose on EC2, Nginx (TLS termination) |
+
+## Live vs legacy code paths
 
 - The deployed frontend uses **only** the course-centric `/api/courses` flow:
-  `app/course_api.py` → `core/course_service.py` → `agents/curriculum_architect.py`
-  + `agents/evaluation_agent.py`, with web-search retrieval via
-  `clients/mcp_search_client.py` (the standalone `edumind_mcp_search` server).
-- A second interactive `/session/*` flow (`app/main.py`, `agents/orchestrator.py`,
-  `agents/tutor.py`, `agents/evaluator.py`, `agents/adaptation_engine.py`) is
-  **legacy** — kept only as a reference implementation, tagged `legacy-session`
-  in `/docs`, and carrying `LEGACY` docstring headers.
-- The old in-process ChromaDB/BGE-embedding/reranker retrieval stack has been
-  removed; it was disabled in production and never served the live flow.
+  `app/course_api.py` → `core/course_service.py` →
+  `agents/curriculum_architect.py` + `agents/evaluation_agent.py`, with
+  retrieval via `clients/mcp_search_client.py`.
+- A second, earlier interactive `/session/*` flow (`app/main.py`,
+  `agents/orchestrator.py`, `agents/tutor.py`, `agents/evaluator.py`,
+  `agents/adaptation_engine.py`) is **legacy** — a full LLM-orchestrator
+  implementation of the same idea, kept as a reference for the queue-based
+  interactive-session pattern, tagged `legacy-session` in `/docs`, and marked
+  with `LEGACY` docstring headers. It is not used by production traffic.
+- The original in-process ChromaDB/BGE-embedding/reranker retrieval stack has
+  been removed; it was disabled in production before this cleanup and never
+  served the live flow.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full breakdown.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full request-flow
+breakdown of both paths.
 
-## Runtime Components
-
-- FastAPI app: `app/api.py`
-- Frontend course API: `app/course_api.py`
-- Google OAuth and session cookies: `app/auth.py`
-- Agent pipeline: `agents/`
-- Course, roadmap, lesson, and validation services: `core/`
-- PostgreSQL repository and schema bootstrap: `db/postgres.py`
-- External LLM/search clients: `clients/`
-- Evaluation metrics and report generation: `evaluation/`
-- Versioned prompt registry: `prompts/` (live-flow prompts as tracked artifacts)
-- Prompt-injection guardrails: `core/guardrails.py` (student text fenced as data) + `core/llm_schemas.py` (Pydantic-validated LLM JSON with an observable failure metric) — see [Architecture → Guardrails](docs/ARCHITECTURE.md#guardrails)
-- Golden prompt-regression suite: `evaluation/golden/`
-- Docker Compose runtime: `docker-compose.yml`
-
-## Prompt registry and golden evals
-
-The prompts that drive the live curriculum, lesson, and evaluation flows are
-versioned artifacts in `prompts/` rather than inline strings — each has a name, an
-integer version, and a `render()` that fails loudly on missing placeholders.
-Snapshot tests prove the extraction is render-identical, and a golden evaluation
-suite (`evaluation/golden/`) runs representative curriculum, diagnosis, and lesson
-cases through the real production code paths and reuses the existing LLM judges to
-catch prompt regressions — a prompt edit that degrades curriculum quality or answer
-diagnosis (including a standing prompt-injection case) fails a CI check before it
-ships. Run it locally with `python -m evaluation.golden.run_golden --suite all`
-(needs a real `GROQ_API_KEY`). See [Architecture](docs/ARCHITECTURE.md) →
-"Prompt management and golden evals".
-
-## Current Production Shape
-
-- Backend domain: `https://course-api.edumindai.org`
-- Frontend domain: `https://edumindai.org`
-- EC2 repository path: `/home/ubuntu/Edumind_Ai`
-- Docker Compose services: `edumind-backend`, `edumind-postgres`
-- Nginx terminates SSL and proxies the backend domain to `127.0.0.1:8000`
-- The production `.env` file lives only on EC2 and must not be committed
-
-## Quick Start
+## Quick start
 
 ```bash
 cp .env.example .env
-```
-
-Fill in local development values for `GROQ_API_KEY`, `TAVILY_API_KEY`,
-`DATABASE_URL`, OAuth settings if needed, and session secret values.
-
-Run with Docker Compose:
-
-```bash
+# fill in GROQ_API_KEY, TAVILY_API_KEY, DATABASE_URL, SESSION_SECRET_KEY
 docker compose up --build
 ```
 
-Run locally with an existing Python environment:
+Or without Docker:
 
 ```bash
-venv/bin/uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Useful URLs:
+| | |
+| --- | --- |
+| API docs | `http://localhost:8000/docs` |
+| Health | `http://localhost:8000/health` |
+| Readiness | `http://localhost:8000/ready` |
+| Metrics | `http://localhost:8000/metrics` |
 
-- API docs: `http://localhost:8000/docs`
-- Health: `http://localhost:8000/health`
-- Readiness: `http://localhost:8000/ready`
-- Metrics: `http://localhost:8000/metrics`
+Dev login (skip Google OAuth locally, `DEV_AUTH_ENABLED=true`):
+
+```bash
+curl -X POST http://localhost:8000/api/auth/dev-login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"student@example.com","name":"Student"}'
+```
 
 ## Tests
 
 ```bash
-venv/bin/pytest -q
-venv/bin/pytest tests/unit -q
-venv/bin/pytest tests/integration -q
+pytest -q                    # full suite — no real network calls required
+pytest tests/unit -q
+pytest tests/integration -q  # mocked LLM/auth integration flows
 ```
 
-The current test suite uses mocked LLM/auth flows for the lightweight integration
-tests. It should not require real Groq, Google, or Tavily network calls.
+Golden prompt-regression suite (needs a real `GROQ_API_KEY`, hits Groq for
+real):
 
-## Tracing
+```bash
+python -m evaluation.golden.run_golden --suite all
+```
 
-Request-scoped distributed tracing (OpenTelemetry) and per-call token/cost
-accounting let you follow **one request through the whole system** — every agent
-step, LLM call, and MCP tool call, with latency, token counts, and estimated
-cost per span.
+Runs representative curriculum, diagnosis, and lesson cases through the live
+production code paths and the same LLM-judge metrics used at runtime —
+including a standing case proving a prompt-injected student answer cannot buy
+a passing grade. Currently wired for manual dispatch in CI
+(`.github/workflows/golden-evals.yml`) while the case thresholds are being
+re-baselined against live Groq rate limits; see the workflow file for status.
 
-Tracing is **opt-in and off by default** (`OTEL_ENABLED=false`): with it off, no
-exporter is installed and every span is a zero-cost no-op, so production is
-unaffected. Token/cost metrics (`edumind_llm_tokens_total`,
-`edumind_llm_cost_usd_total`) are always recorded and scraped via `/metrics`.
+## Tracing and cost
 
-To profile locally with [Phoenix](https://github.com/Arize-ai/phoenix):
+Tracing is opt-in and off by default:
 
 ```bash
 docker compose -f monitoring/docker-compose.monitoring.yml up -d phoenix
 OTEL_ENABLED=true OTEL_EXPORTER_ENDPOINT=http://localhost:6006/v1/traces \
-  venv/bin/uvicorn app.api:app --port 8000
-# then hit an endpoint and open http://localhost:6006
+  uvicorn app.api:app --port 8000
+# hit an endpoint, then open http://localhost:6006
 ```
 
 <!-- TODO: embed a Phoenix trace screenshot here (HTTP → workflow → agent → LLM/tool spans). -->
 
-Fill in real Groq prices in `GROQ_MODEL_PRICES` (`config.py`) before trusting the
-cost metric — it ships with placeholder zeros and skips cost for unpriced models.
-See [Architecture → Observability](docs/ARCHITECTURE.md#observability) for the
-full span hierarchy and the learner-privacy rules for span attributes.
+Token and cost counters (`edumind_llm_tokens_total`,
+`edumind_llm_cost_usd_total`) are always recorded regardless of tracing state,
+scraped via `/metrics`. Fill in real Groq per-model prices in
+`GROQ_MODEL_PRICES` (`config.py`) before trusting the cost numbers — it ships
+with placeholder zeros and skips cost recording for unpriced models.
 
-## Documentation Index
+## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md)
+- [Architecture](docs/ARCHITECTURE.md) — versioned index: [V2 (current)](docs/architecture/ARCHITECTURE_V2.md) has full request flows, data model, guardrails, observability; [V1 (archived)](docs/architecture/ARCHITECTURE_V1.md) is the pre-rework snapshot
 - [API Reference](docs/API_REFERENCE.md)
 - [Environment Variables](docs/ENVIRONMENT.md)
 - [Setup](docs/SETUP.md)
@@ -137,15 +190,19 @@ full span hierarchy and the learner-privacy rules for span attributes.
 - [Logging](docs/LOGGING.md)
 - [Developer Handover](docs/DEVELOPER_HANDOVER.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
-- [Docker and EC2 Deployment](DOCKER.md)
+- [Docker & EC2 Deployment](DOCKER.md)
+- [Prompt registry](prompts/README.md)
 
-## Safety Rules
+## Production notes
 
-- Do not commit `.env`, API keys, OAuth secrets, private keys, or database URLs
-  containing real credentials.
-- Do not run `docker compose down -v` in production; it deletes named volumes and
-  can remove Postgres data.
-- Do not log full prompts, generated lessons, tokens, authorization headers, raw
-  documents, or private user content.
-- Keep route paths, response shapes, database schema behavior, and LLM prompt
-  contracts stable unless the frontend and tests are updated together.
+- Backend: `course-api.edumindai.org` · Frontend: `edumindai.org` · EC2 path:
+  `/home/ubuntu/Edumind_Ai` · services: `edumind-backend`, `edumind-postgres` ·
+  Nginx terminates TLS in front of `127.0.0.1:8000`.
+- Never commit `.env`, API keys, OAuth secrets, or a `DATABASE_URL` with real
+  credentials.
+- Never run `docker compose down -v` in production — it deletes the named
+  Postgres volume.
+- Never log full prompts, generated lessons, tokens, authorization headers, or
+  private learner text — span attributes and traces follow the same rule (ids
+  and short excerpts only, see
+  [Architecture V2 → Observability](docs/architecture/ARCHITECTURE_V2.md#observability)).
